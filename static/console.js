@@ -343,14 +343,23 @@ async function openPty(cmd, tabId) {
   // Fit whenever the terminal box changes size (initial show, window resize,
   // or the mobile soft-keyboard opening/closing) so it always fills the width.
   let fitScheduled = false;
+  let lastFitW = 0, lastFitH = 0, lastFitTime = 0;
   const doFit = () => {
     if (fitScheduled) return;
     fitScheduled = true;
     requestAnimationFrame(() => {
       fitScheduled = false;
+      const w = host.clientWidth, h = host.clientHeight;
       // Skip when the host is hidden (display:none) so we never tell the backend
       // to resize a terminal to 0x0, which can break running programs.
-      if (host.clientWidth === 0 || host.clientHeight === 0) return;
+      if (w === 0 || h === 0) return;
+      // Break any resize feedback loop: fit() can change the rendered host size,
+      // which re-fires ResizeObserver, which calls fit() again — pegging the CPU
+      // and flooding the backend with resize messages (and freezing the terminal
+      // on mobile). Only refit when the box actually changed and not too often.
+      const now = (typeof performance !== "undefined" ? performance.now() : Date.now());
+      if ((w === lastFitW && h === lastFitH) || now - lastFitTime < 120) return;
+      lastFitW = w; lastFitH = h; lastFitTime = now;
       try { t.fitAddon.fit(); } catch (e) { /* ignore */ }
       if (t.ptyWs && t.ptyWs.readyState === 1) {
         t.ptyWs.send(JSON.stringify({ t: "resize", cols: t.term.cols, rows: t.term.rows }));
@@ -556,10 +565,6 @@ elCmd.addEventListener("keydown", (e) => {
 
 elNew.onclick = () => newTab();
 document.getElementById("screen").addEventListener("click", () => elCmd.focus());
-
-elCmd.addEventListener("focus", () => {
-  elCmd.scrollIntoView({ block: "nearest", behavior: "auto" });
-});
 
 // ---------------------------------------------------------------------------
 // Mobile key bar: Tab / Esc / Ctrl / arrow buttons for touch keyboards.

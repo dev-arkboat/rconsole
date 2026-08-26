@@ -209,10 +209,6 @@ body.touch #app.pty #footer { display: flex; }
 #footer {
   background: var(--panel);
   border-top: 1px solid var(--border);
-  /* Keep the input bar on its own compositor layer so it tracks the soft
-     keyboard smoothly instead of repainting the whole page. */
-  transform: translateZ(0);
-  will-change: transform;
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
