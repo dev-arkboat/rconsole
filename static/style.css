@@ -314,6 +314,12 @@ body.touch #newtab { width: 52px; font-size: 24px; }
   body.touch #prompt { font-size: 15px; }
   .login-body { padding: env(safe-area-inset-top, 0px) 0 env(safe-area-inset-bottom, 0px); }
   .login-box { padding: 22px 20px; }
+
+  /* Editor bar: drop the language tag on tiny screens so the Save/Close buttons
+     always stay in view and tappable. */
+  #editor-lang { display: none; }
+  #editor-bar { gap: 6px; }
+  #editor-file { max-width: 64%; }
 }
 
 /* ---------------------------------------------------------------------------
@@ -325,20 +331,27 @@ body.touch #newtab { width: 52px; font-size: 24px; }
 #editor {
   display: none;
   position: absolute;
-  inset: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   flex-direction: column;
   background: var(--bg);
-  z-index: 30;
 }
+/* Fullscreen: hide the tab bar, line console, terminal and soft-key bar while
+   the code editor is open. The editor is absolutely anchored (top/right/bottom/
+   left:0) inside #app, which is already sized to the viewport, so it always
+   fills the screen regardless of flex quirks or fixed-positioning support. */
+#app.editing #tabbar,
 #app.editing #screen,
 #app.editing #terms,
-#app.editing #footer { display: none; }
+#app.editing #footer { display: none !important; }
 #app.editing #editor { display: flex; }
 
 #editor-bar {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   padding: 6px 10px;
   padding-top: max(6px, env(safe-area-inset-top, 0px));
   background: var(--panel);
@@ -350,12 +363,21 @@ body.touch #newtab { width: 52px; font-size: 24px; }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 46%;
+  min-width: 0;
+  max-width: 50%;
 }
-#editor-lang { color: var(--green); font-size: 12px; }
-#editor-status { color: var(--dim); font-size: 12px; }
-.editor-spacer { flex: 1; }
+#editor-lang { color: var(--green); font-size: 12px; flex: 0 0 auto; }
+#editor-status {
+  color: var(--dim);
+  font-size: 12px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.editor-spacer { flex: 1 1 auto; min-width: 0; }
 #editor-bar button {
+  flex: 0 0 auto;
   background: #0c141d;
   border: 1px solid var(--border);
   color: var(--fg);
@@ -384,15 +406,23 @@ body.touch #newtab { width: 52px; font-size: 24px; }
   font: 14px/1.5 "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
 }
 #editor-scroll { position: relative; flex: 1; min-width: 0; overflow: hidden; }
+#editor-highlight, #editor-input, #editor-gutter {
+  box-sizing: border-box;
+}
 #editor-highlight, #editor-input {
   margin: 0;
   position: absolute;
-  inset: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   padding: 8px 12px;
   font: 14px/1.5 "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
   white-space: pre;
   tab-size: 4;
   -moz-tab-size: 4;
+  letter-spacing: normal;
+  -webkit-text-size-adjust: 100%;
   border: 0;
   outline: none;
 }

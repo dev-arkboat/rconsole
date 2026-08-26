@@ -942,7 +942,11 @@ async function openCodeEditor(path) {
   renderHighlight();
   elEditorInput.scrollTop = 0;
   elEditorGutter.scrollTop = 0;
-  document.getElementById("app").classList.add("editing");
+  const appEl = document.getElementById("app");
+  // Drop any lingering pty class so the terminal view can't sit underneath the
+  // editor (which would look like overlapping panels).
+  appEl.classList.remove("pty");
+  appEl.classList.add("editing");
   setTimeout(() => elEditorInput.focus({ preventScroll: true }), 60);
 }
 
@@ -953,6 +957,7 @@ function closeCodeEditor() {
   document.getElementById("app").classList.remove("editing");
   elEditor.setAttribute("hidden", "");
   editorState = null;
+  updateView();
   elCmd.focus();
 }
 
