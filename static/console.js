@@ -401,16 +401,16 @@ async function openPty(cmd, tabId) {
     ws.send(JSON.stringify({ t: "resize", cols: t.term.cols, rows: t.term.rows }));
   };
   ws.onmessage = (e) => {
-    // A control message from the server: the PTY process has exited, so we
-    // return to the line console automatically instead of stranding the user.
-    if (typeof e.data === "string") {
+    // Control frames are prefixed with SOH (\x01) so raw terminal output can
+    // never be misinterpreted as one (e.g. a program printing '{"t":"exit"}').
+    if (typeof e.data === "string" && e.data.charCodeAt(0) === 1) {
       try {
-        const msg = JSON.parse(e.data);
+        const msg = JSON.parse(e.data.slice(1));
         if (msg && msg.t === "exit") {
           onPtyExit(tabId);
-          return;
         }
-      } catch (err) { /* not JSON: regular terminal output */ }
+      } catch (err) { /* ignore malformed control frame */ }
+      return;
     }
     if (t.ptyText !== undefined) t.ptyText += e.data;
     t.term.write(e.data);
@@ -437,13 +437,6 @@ async function openPty(cmd, tabId) {
   ws.onerror = ws.onclose;
 
   t.term.onData((d) => {
-    // Sticky Ctrl: the next typed letter is sent as a control character.
-    if (ctrlActive && d.length === 1 && /[a-zA-Z]/.test(d)) {
-      const ctrlChar = String.fromCharCode(d.toUpperCase().charCodeAt(0) - 64);
-      setCtrl(false);
-      sendPtyTo(t, ctrlChar);
-      return;
-    }
     sendPtyTo(t, d);
   });
 
@@ -611,9 +604,16 @@ if (window.matchMedia && (window.matchMedia("(max-width: 768px)").matches ||
 // Keep the footer (input + key bar) visible above the soft keyboard by sizing
 // #app to the visible viewport rather than the full window height.
 let vpRaf = null;
+let lastVpHeight = 0;
 function fitToViewport() {
   const vv = window.visualViewport;
   if (!vv) return;
+  // The soft keyboard animating or the caret scrolling fires resize/scroll
+  // events constantly while you type. Only react when the *height* actually
+  // changed (keyboard open/close, rotation) — otherwise we'd flood the backend
+  // with resize messages and stall the terminal on mobile.
+  if (vv.height === lastVpHeight) return;
+  lastVpHeight = vv.height;
   if (vpRaf) cancelAnimationFrame(vpRaf);
   vpRaf = requestAnimationFrame(() => {
     document.getElementById("app").style.height = vv.height + "px";
@@ -655,12 +655,17 @@ function sendPty(d) {
 function handlePtyKey(b) {
   const t = activeTab();
   if (!t || !t.ptyActive) return;
-  const key = b.dataset.key;
-  if (b.dataset.mod === "ctrl") {
-    setCtrl(!ctrlActive);
+  setCtrl(false);
+  if (b.dataset.ctrl) {
+    // Explicit control combos (e.g. ^X to quit nano). Sending the control char
+    // directly means normal typing is NEVER turned into a control sequence, so
+    // a stray modifier can't accidentally quit the editor mid-edit.
+    const ch = String.fromCharCode(b.dataset.ctrl.toUpperCase().charCodeAt(0) - 64);
+    sendPtyTo(t, ch);
+    if (t.term) t.term.focus();
     return;
   }
-  setCtrl(false);
+  const key = b.dataset.key;
   if (key === "Tab") {
     sendPtyTo(t, "\t");
   } else if (key === "Esc") {
@@ -702,14 +707,32 @@ function historyNav(dir) {
   elCmd.selectionStart = elCmd.selectionEnd = end;
 }
 
+function isEditorPrompt() {
+  const t = activeTab();
+  if (!t) return false;
+  return /^(edit|L\d+|ins)> /.test(t.interactivePrompt || "");
+}
+
 function doKeybarAction(b) {
   const t = activeTab();
   if (isPtyActive()) {
     handlePtyKey(b);
     return;
   }
-  if (b.dataset.key) {
-    const key = b.dataset.key;
+  const key = b.dataset.key;
+  if (t.interactive) {
+    // Inside the in-console editor, arrow keys move the line cursor (up/down)
+    // so you can navigate like nano on a phone; left/right still move the caret
+    // within the command you're typing, and Tab/Esc behave normally.
+    if (key === "ArrowUp" && isEditorPrompt()) { send("up"); return; }
+    if (key === "ArrowDown" && isEditorPrompt()) { send("down"); return; }
+    if (key === "Tab") { insertAtCursor("\t"); elCmd.focus({ preventScroll: true }); return; }
+    if (key === "Esc") { elCmd.value = ""; elCmd.focus({ preventScroll: true }); return; }
+    if (key === "ArrowLeft") { moveCursor(-1); elCmd.focus({ preventScroll: true }); return; }
+    if (key === "ArrowRight") { moveCursor(1); elCmd.focus({ preventScroll: true }); return; }
+    return;
+  }
+  if (key) {
     if (key === "Tab") {
       insertAtCursor("\t");
     } else if (key === "Esc") {
@@ -724,8 +747,6 @@ function doKeybarAction(b) {
       historyNav(1);
     }
     elCmd.focus({ preventScroll: true });
-  } else if (b.dataset.mod === "ctrl") {
-    setCtrl(!ctrlActive);
   }
 }
 
@@ -738,14 +759,6 @@ elKeybar.addEventListener("click", (e) => {
   const b = e.target.closest("button");
   if (!b) return;
   doKeybarAction(b);
-});
-
-// When Ctrl is held (sticky), forward modifier state on physical keystrokes so
-// the backend can treat them as control sequences once interactivity lands.
-elCmd.addEventListener("keydown", (e) => {
-  if (ctrlActive && e.key.length === 1) {
-    e.ctrlKey = true;
-  }
 });
 
 // Keep the active terminal fitted on window (non-viewport) resizes.

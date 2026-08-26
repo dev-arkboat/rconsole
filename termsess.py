@@ -179,7 +179,10 @@ class TermSession:
         # to the line console instead of leaving the user stuck in the terminal
         # view (the "ws") with a dead session.
         try:
-            self._broadcast(json.dumps({"t": "exit"}))
+            # Prefix control messages with SOH (\x01) so raw terminal output can
+            # never be misinterpreted as a control frame (e.g. a program printing
+            # the string '{"t":"exit"}' would otherwise kick the user to console).
+            self._broadcast("\x01" + json.dumps({"t": "exit"}))
         except Exception:
             pass
         # A finished session can't be usefully re-attached, so tear it down

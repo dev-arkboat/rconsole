@@ -115,13 +115,12 @@ def process(tab, username, is_admin, sid, raw):
     if tab.get("gen") is not None:
         gen = tab["gen"]
         try:
-            prompt = gen.send(line)
-            tab["prompt"] = prompt
-            return {"prompt": prompt}
+            r = gen.send(line)
         except StopIteration as e:
             tab["gen"] = None
             tab["prompt"] = None
             return _normalize(e.value)
+        return _normalize_gen(r)
 
     if line.strip() == "":
         return {}
@@ -166,10 +165,10 @@ def process(tab, username, is_admin, sid, raw):
             return {"output": f"{name}: error: {e}"}
         if hasattr(result, "send") and hasattr(result, "__next__"):
             try:
-                prompt = next(result)
+                r = next(result)
                 tab["gen"] = result
-                tab["prompt"] = prompt
-                return {"prompt": prompt}
+                tab["prompt"] = None
+                return _normalize_gen(r)
             except StopIteration as e:
                 return _normalize(e.value)
         return _normalize(result)
@@ -187,3 +186,16 @@ def _normalize(result):
     if isinstance(result, dict):
         return result
     return {"output": str(result)}
+
+
+def _normalize_gen(r):
+    """Normalize a value yielded by an interactive generator.
+
+    A generator may yield either a plain prompt string or a dict carrying a
+    prompt plus optional fields (output, clear) so an interactive command (e.g.
+    an in-console editor) can render content between user inputs.
+    """
+    if isinstance(r, dict):
+        r.setdefault("prompt", "")
+        return r
+    return {"prompt": str(r)}
