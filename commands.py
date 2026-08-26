@@ -71,7 +71,7 @@ def cmd_help(ctx, args):
     out = ["Console-native commands (stateful / auth / hosting):", ""]
     out.append("  " + "  ".join(std))
     out.append("")
-    out.append("  edit <file>   in-console file editor (great on mobile)")
+    out.append("  edit <file>   built-in code editor (highlighting, mobile-friendly)")
     out.append("  fm [path]     in-console file manager + editor")
     out.append("")
     out.append("Commands requiring 'sudo' (admin only):")
@@ -648,17 +648,18 @@ def edit_routine(path, ctx):
 
 @command("edit")
 def cmd_edit(ctx, args):
-    """Open a file in the in-console Python editor (mobile-friendly).
+    """Open a file in the built-in code editor (syntax highlighting, smooth on mobile).
 
     Usage:  edit <file>
-    Interactive editor that works through the normal console input - smooth on
-    phones (no xterm / soft-keyboard issues). Type ? for commands.
+    Launches the in-browser code editor (highlighting + save). Great on phones.
     """
     if not args:
-        return "Usage: edit <file>   (opens the in-console editor)"
+        return "Usage: edit <file>   (opens the code editor)"
     target = _raw_arg(ctx) or args[0]
     path = _resolve_path(ctx, target)
-    return edit_routine(str(path), ctx)
+    if path.is_dir():
+        return f"edit: {path}: Is a directory"
+    return {"editor": str(path)}
 
 
 # --- file manager -----------------------------------------------------------
@@ -758,9 +759,12 @@ def fm_routine(start, ctx):
         if cmd.startswith("open ") or cmd.startswith("edit "):
             name = cmd.split(" ", 1)[1].strip()
             path = _resolve_path(ctx, name)
-            yield from edit_routine(str(path), ctx)
-            status = ""
-            continue
+            if path.is_dir():
+                status = f"Not a file: {name}"
+                continue
+            # Hand off to the in-browser code editor (returns, ending the fm
+            # session; closing the editor drops back to the console).
+            return {"editor": str(path)}
         if cmd.startswith("cat "):
             name = cmd[4:].strip()
             path = _resolve_path(ctx, name)

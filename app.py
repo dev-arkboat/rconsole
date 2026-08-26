@@ -308,6 +308,54 @@ def api_close_tab():
     return {"ok": True}
 
 
+# ---------------------------------------------------------------------------
+# Client-side code editor: read / write a single file. Editing (and syntax
+# highlighting) happens entirely in the browser, so it stays smooth on mobile;
+# only Save touches the server.
+# ---------------------------------------------------------------------------
+@app.route("/api/file")
+def api_file():
+    if "username" not in session:
+        return {"error": "unauthorized"}, 401
+    path = request.args.get("path", "")
+    if not path:
+        return {"error": "missing path"}, 400
+    p = os.path.abspath(path)
+    if os.path.isdir(p):
+        return {"error": "is a directory"}, 400
+    try:
+        if os.path.exists(p):
+            with open(p, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+            exists = True
+        else:
+            content, exists = "", False
+    except Exception as e:
+        return {"error": str(e)}, 500
+    return {"path": p, "content": content, "exists": exists}
+
+
+@app.route("/api/file", methods=["POST"])
+def api_file_save():
+    if "username" not in session:
+        return {"error": "unauthorized"}, 401
+    data = request.get_json(silent=True) or {}
+    path = data.get("path", "")
+    content = data.get("content", "")
+    if not path:
+        return {"ok": False, "error": "missing path"}, 400
+    p = os.path.abspath(path)
+    try:
+        parent = os.path.dirname(p)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(content)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}, 500
+    return {"ok": True, "path": p}
+
+
 @sock.route("/ws")
 def ws_terminal(ws):
     if "username" not in session:

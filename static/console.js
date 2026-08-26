@@ -252,6 +252,11 @@ async function send(cmd) {
     return;
   }
 
+  if (data.editor) {
+    openCodeEditor(data.editor);
+    return;
+  }
+
   if (data.clear) t.lines = [];
 
   if (data.pty) {
@@ -763,6 +768,281 @@ elKeybar.addEventListener("click", (e) => {
 
 // Keep the active terminal fitted on window (non-viewport) resizes.
 window.addEventListener("resize", onPtyResize);
+
+// ---------------------------------------------------------------------------
+// Built-in code editor (client-side). All editing + syntax highlighting happen
+// in the browser, so it stays smooth on phones and laptops alike; only Save
+// touches the server.
+// ---------------------------------------------------------------------------
+const elEditor = document.getElementById("editor");
+const elEditorFile = document.getElementById("editor-file");
+const elEditorLang = document.getElementById("editor-lang");
+const elEditorStatus = document.getElementById("editor-status");
+const elEditorInput = document.getElementById("editor-input");
+const elEditorPre = document.getElementById("editor-highlight");
+const elEditorCode = elEditorPre.querySelector("code");
+const elEditorGutter = document.getElementById("editor-gutter");
+let editorState = null;
+let hlRaf = null;
+
+function escHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function langFromPath(p) {
+  const ext = (p.split(".").pop() || "").toLowerCase();
+  const m = {
+    py: "python", pyw: "python", js: "javascript", mjs: "javascript",
+    cjs: "javascript", ts: "typescript", tsx: "typescript", jsx: "javascript",
+    json: "json", html: "html", htm: "html", xml: "xml", vue: "html",
+    css: "css", scss: "css", less: "css", yaml: "yaml", yml: "yaml",
+    md: "markdown", sh: "bash", bash: "bash", zsh: "bash", txt: "text",
+    csv: "text", ini: "ini", conf: "ini",
+  };
+  return m[ext] || "text";
+}
+
+// Per-language token rules: [className, regexSource]. Comments/strings first.
+const HL_RULES = {
+  python: [
+    ["comment", "#[^\\n]*"],
+    ["string", "'''[\\s\\S]*?'''"],
+    ["string", '"""[\\s\\S]*?"""'],
+    ["string", "'[^'\\\\\\n]*'"],
+    ["string", '"[^"\\\\\\n]*"'],
+    ["number", "\\b\\d+(\\.\\d+)?\\b"],
+    ["keyword", "\\b(def|class|import|from|as|return|if|elif|else|for|while|break|continue|pass|with|try|except|finally|raise|lambda|yield|global|nonlocal|assert|del|in|is|not|and|or|async|await|print)\\b"],
+    ["bool", "\\b(True|False|None)\\b"],
+    ["function", "([A-Za-z_]\\w*)\\s*(?=\\()"],
+    ["builtin", "\\b(self|cls|super|len|range|str|int|float|list|dict|set|tuple|open|enumerate|zip|map|filter|sorted|reversed|sum|min|max|abs|type|isinstance|object|Exception)\\b"],
+  ],
+  javascript: [
+    ["comment", "//[^\\n]*"],
+    ["comment", "/\\*[\\s\\S]*?\\*/"],
+    ["string", "`[^`]*`"],
+    ["string", "'[^'\\\\\\n]*'"],
+    ["string", '"[^"\\\\\\n]*"'],
+    ["number", "\\b\\d+(\\.\\d+)?\\b"],
+    ["keyword", "\\b(function|return|if|else|for|while|var|let|const|class|extends|new|import|export|from|default|try|catch|finally|throw|typeof|instanceof|in|of|await|async|yield|switch|case|break|continue|do|void|delete|this|super)\\b"],
+    ["bool", "\\b(true|false|null|undefined|NaN)\\b"],
+    ["function", "([A-Za-z_$]\\w*)\\s*(?=\\()"],
+    ["builtin", "\\b(console|document|window|require|module|exports|process|Math|JSON|Object|Array|String|Number|Boolean|Promise|Map|Set|Symbol)\\b"],
+  ],
+  json: [
+    ["string", '"[^"\\\\\\n]*"(?=\\s*:)'],
+    ["string", '"[^"\\\\\\n]*"'],
+    ["number", "-?\\b\\d+(\\.\\d+)?([eE][+-]?\\d+)?\\b"],
+    ["bool", "\\b(true|false|null)\\b"],
+    ["punct", "[{}\\[\\]:,]"],
+  ],
+  html: [
+    ["comment", "<!--[\\s\\S]*?-->"],
+    ["string", '"[^"\\\\\\n]*"|\'[^\']*\''],
+    ["tag", "</?[a-zA-Z][a-zA-Z0-9]*"],
+    ["attr", "\\b[a-zA-Z-]+(?==)"],
+  ],
+  css: [
+    ["comment", "/\\*[\\s\\S]*?\\*/"],
+    ["string", '"[^"\\\\\\n]*"|\'[^\']*\''],
+    ["keyword", "@media|@import|@keyframes|@font-face|@supports"],
+    ["attr", "[a-zA-Z-]+(?=\\s*:)"],
+    ["number", "#[0-9a-fA-F]{3,8}\\b|\\b\\d+(\\.\\d+)?(px|em|rem|%|s|ms|vh|vw|fr|pt|deg)?\\b"],
+  ],
+  yaml: [
+    ["comment", "#[^\\n]*"],
+    ["string", '"[^"\\\\\\n]*"|\'[^\']*\''],
+    ["attr", "^[\\s-]*[A-Za-z0-9_.-]+(?=:)"],
+    ["bool", "\\b(true|false|null|yes|no|~)\\b"],
+    ["number", "\\b\\d+(\\.\\d+)?\\b"],
+  ],
+  bash: [
+    ["comment", "#[^\\n]*"],
+    ["string", '"[^"\\\\\\n]*"|\'[^\']*\''],
+    ["keyword", "\\b(if|then|else|elif|fi|for|in|do|done|while|case|esac|function|return|export|local|echo|cd|exit|source|set)\\b"],
+    ["builtin", "\\b(ls|cd|pwd|cat|echo|grep|sed|awk|cp|mv|rm|mkdir|touch|sudo|apt|pip|python|python3|git|chmod|chown)\\b"],
+  ],
+  markdown: [
+    ["comment", "^#{1,6} .*"],
+    ["string", "`[^`]*`"],
+    ["attr", "\\[[^\\]]*\\]\\([^\\)]*\\)"],
+    ["keyword", "^\\s*[-*+] "],
+    ["bool", "^\\s*\\d+\\. "],
+  ],
+};
+
+// Build a compiled highlighter per language (cached).
+const _hlCache = {};
+function getHighlighter(lang) {
+  if (lang === "text" || !HL_RULES[lang]) return null;
+  if (_hlCache[lang]) return _hlCache[lang];
+  const rules = HL_RULES[lang];
+  const parts = rules.map((r, i) => `(?<g${i}>${r[1]})`);
+  const re = new RegExp(parts.join("|"), "g");
+  const fn = function (code) {
+    let out = "", last = 0, m;
+    re.lastIndex = 0;
+    while ((m = re.exec(code))) {
+      if (m.index > last) out += escHtml(code.slice(last, m.index));
+      let cls = null;
+      for (let i = 0; i < rules.length; i++) {
+        if (m.groups[`g${i}`] != null) { cls = rules[i][0]; break; }
+      }
+      const text = m[0];
+      if (cls) out += `<span class="tok-${cls}">${escHtml(text)}</span>`;
+      else out += escHtml(text);
+      last = m.index + text.length;
+      if (text.length === 0) re.lastIndex++;
+    }
+    out += escHtml(code.slice(last));
+    return out;
+  };
+  _hlCache[lang] = fn;
+  return fn;
+}
+
+function renderHighlight() {
+  if (!editorState) return;
+  const code = elEditorInput.value;
+  const hl = getHighlighter(editorState.lang);
+  if (hl && code.length <= 300000) {
+    elEditorCode.innerHTML = hl(code) + "\n";
+  } else {
+    elEditorCode.textContent = code;
+  }
+  updateGutter();
+}
+
+function updateGutter() {
+  const n = elEditorInput.value.split("\n").length;
+  let s = "";
+  for (let i = 1; i <= n; i++) s += i + "\n";
+  elEditorGutter.textContent = s;
+}
+
+function scheduleHighlight() {
+  if (hlRaf) return;
+  hlRaf = requestAnimationFrame(() => {
+    hlRaf = null;
+    renderHighlight();
+  });
+}
+
+async function openCodeEditor(path) {
+  let content = "", exists = false;
+  try {
+    const r = await fetch("/api/file?path=" + encodeURIComponent(path));
+    if (r.ok) { const j = await r.json(); content = j.content || ""; exists = !!j.exists; }
+  } catch (e) { /* offline: open empty */ }
+  editorState = { path, lang: langFromPath(path), dirty: false, exists };
+  elEditor.removeAttribute("hidden");
+  elEditorFile.textContent = (path.split("/").pop() || path) + (exists ? "" : "  (new)");
+  elEditorLang.textContent = editorState.lang;
+  elEditorStatus.textContent = "";
+  elEditorInput.value = content;
+  renderHighlight();
+  elEditorInput.scrollTop = 0;
+  elEditorGutter.scrollTop = 0;
+  document.getElementById("app").classList.add("editing");
+  setTimeout(() => elEditorInput.focus({ preventScroll: true }), 60);
+}
+
+function closeCodeEditor() {
+  if (editorState && editorState.dirty) {
+    if (!confirm("Discard unsaved changes to " + editorState.path + "?")) return;
+  }
+  document.getElementById("app").classList.remove("editing");
+  elEditor.setAttribute("hidden", "");
+  editorState = null;
+  elCmd.focus();
+}
+
+async function saveCodeEditor() {
+  if (!editorState) return;
+  elEditorStatus.textContent = "Saving…";
+  try {
+    const r = await fetch("/api/file", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: editorState.path, content: elEditorInput.value }),
+    });
+    const j = await r.json();
+    if (j.ok) {
+      editorState.dirty = false;
+      editorState.exists = true;
+      elEditorStatus.textContent = "Saved " + new Date().toLocaleTimeString();
+    } else {
+      elEditorStatus.textContent = "Save failed: " + (j.error || "unknown");
+    }
+  } catch (e) {
+    elEditorStatus.textContent = "Save failed: " + e;
+  }
+}
+
+function indentSelection(dir) {
+  const ta = elEditorInput;
+  const s = ta.selectionStart, e = ta.selectionEnd;
+  const val = ta.value;
+  if (s === e) {
+    if (dir > 0) {
+      ta.value = val.slice(0, s) + "    " + val.slice(s);
+      ta.selectionStart = ta.selectionEnd = s + 4;
+    } else {
+      const lineStart = val.lastIndexOf("\n", s - 1) + 1;
+      const mm = /^( {1,4}|\t)/.exec(val.slice(lineStart));
+      if (mm) {
+        ta.value = val.slice(0, lineStart) + val.slice(lineStart + mm[0].length);
+        ta.selectionStart = ta.selectionEnd = Math.max(lineStart, s - mm[0].length);
+      }
+    }
+    return;
+  }
+  const lineStart = val.lastIndexOf("\n", s - 1) + 1;
+  const block = val.slice(lineStart, e);
+  const newBlock = dir > 0 ? block.replace(/^/gm, "    ") : block.replace(/^( {1,4}|\t)/gm, "");
+  ta.value = val.slice(0, lineStart) + newBlock + val.slice(e);
+  ta.selectionStart = lineStart;
+  ta.selectionEnd = lineStart + newBlock.length;
+}
+
+elEditorInput.addEventListener("input", () => {
+  if (editorState) {
+    editorState.dirty = true;
+    elEditorStatus.textContent = "● unsaved";
+  }
+  scheduleHighlight();
+});
+elEditorInput.addEventListener("scroll", () => {
+  elEditorPre.scrollTop = elEditorInput.scrollTop;
+  elEditorPre.scrollLeft = elEditorInput.scrollLeft;
+  elEditorGutter.scrollTop = elEditorInput.scrollTop;
+});
+elEditorInput.addEventListener("keydown", (e) => {
+  if (e.key === "Tab") {
+    e.preventDefault();
+    indentSelection(e.shiftKey ? -1 : 1);
+    if (editorState) { editorState.dirty = true; elEditorStatus.textContent = "● unsaved"; }
+    scheduleHighlight();
+  } else if ((e.ctrlKey || e.metaKey) && (e.key === "s" || e.key === "S")) {
+    e.preventDefault();
+    saveCodeEditor();
+  } else if (e.key === "Escape") {
+    e.preventDefault();
+    closeCodeEditor();
+  }
+});
+elEditorGutter.addEventListener("click", (e) => {
+  const rect = elEditorGutter.getBoundingClientRect();
+  const lh = parseFloat(getComputedStyle(elEditorInput).lineHeight) || 21;
+  const line = Math.floor((e.clientY - rect.top + elEditorGutter.scrollTop) / lh) + 1;
+  const lines = elEditorInput.value.split("\n");
+  if (line < 1 || line > lines.length) return;
+  let pos = 0;
+  for (let i = 0; i < line - 1; i++) pos += lines[i].length + 1;
+  elEditorInput.focus();
+  elEditorInput.selectionStart = elEditorInput.selectionEnd = pos;
+});
+document.getElementById("editor-save").addEventListener("click", saveCodeEditor);
+document.getElementById("editor-close").addEventListener("click", closeCodeEditor);
 
 // On load, rebuild tabs from the server so persistent terminal sessions
 // (e.g. a long-running bot) survive a page refresh and can be re-attached.

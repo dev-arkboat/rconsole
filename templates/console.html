@@ -24,6 +24,24 @@
       </form>
     </div>
     <div id="terms"></div>
+    <div id="editor" hidden>
+      <div id="editor-bar">
+        <span id="editor-file" title="file"></span>
+        <span id="editor-lang"></span>
+        <span id="editor-status"></span>
+        <span class="editor-spacer"></span>
+        <button id="editor-save" type="button" title="Save (Ctrl/Cmd+S)">Save</button>
+        <button id="editor-close" type="button" title="Close">Close</button>
+      </div>
+      <div id="editor-body">
+        <div id="editor-gutter" aria-hidden="true"></div>
+        <div id="editor-scroll">
+          <pre id="editor-highlight" aria-hidden="true"><code></code></pre>
+          <textarea id="editor-input" spellcheck="false" autocomplete="off"
+                    autocorrect="off" autocapitalize="off" wrap="off"></textarea>
+        </div>
+      </div>
+    </div>
     <div id="footer">
       <div id="keybar">
         <div class="kb-group">
