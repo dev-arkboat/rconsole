@@ -239,6 +239,7 @@ function openPty(cmd, tabId) {
   t.ptyActive = true;
   t.isTerminal = true;
   t.cmd = cmd;
+  t.ptyText = "";
 
   const host = document.createElement("div");
   host.className = "term-host";
@@ -288,7 +289,21 @@ function openPty(cmd, tabId) {
   ws.onopen = () => {
     ws.send(JSON.stringify({ t: "resize", cols: t.term.cols, rows: t.term.rows }));
   };
-  ws.onmessage = (e) => { t.term.write(e.data); };
+  ws.onmessage = (e) => {
+    // A control message from the server: the PTY process has exited, so we
+    // return to the line console automatically instead of stranding the user.
+    if (typeof e.data === "string") {
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg && msg.t === "exit") {
+          onPtyExit(tabId);
+          return;
+        }
+      } catch (err) { /* not JSON: regular terminal output */ }
+    }
+    if (t.ptyText !== undefined) t.ptyText += e.data;
+    t.term.write(e.data);
+  };
   ws.onclose = () => closePty(tabId);
   ws.onerror = () => closePty(tabId);
 
@@ -351,6 +366,39 @@ function closePty(tabId) {
 
 // Show the active tab's view: its live terminal (if it has one) or the line
 // console. Background terminals keep running and are merely hidden.
+function stripAnsi(s) {
+  return String(s)
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")
+    .replace(/\x1b[()][AB0]/g, "")
+    .replace(/\x1b[=>]/g, "")
+    .replace(/\x1b[78]/g, "");
+}
+
+// The PTY process ended on its own (one-shot command, or the user quit a
+// full-screen program). Capture the output into the console's scrollback and
+// drop back to the line console so the user isn't stuck in the dead terminal.
+function onPtyExit(tabId) {
+  const t = tabs.find((x) => x.id === tabId);
+  if (!t) return;
+  if (t.ptyText) {
+    const lines = stripAnsi(t.ptyText).replace(/\r/g, "").split("\n");
+    for (const l of lines) {
+      if (l.trim() !== "") t.lines.push({ text: l });
+    }
+  }
+  // Tell the server to tear down the finished session so it doesn't linger.
+  if (t.ptyWs && t.ptyWs.readyState === 1) {
+    try { t.ptyWs.send(JSON.stringify({ t: "kill" })); } catch (e) { /* ignore */ }
+  }
+  t.isTerminal = false;
+  t.cmd = "";
+  t.ptyText = "";
+  closePty(tabId);
+  renderOutput();
+  updateView();
+  elCmd.focus();
+}
+
 function updateView() {
   const t = activeTab();
   const app = document.getElementById("app");

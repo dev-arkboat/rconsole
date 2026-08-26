@@ -155,11 +155,36 @@ html, body {
 .term-host .xterm { width: 100%; height: 100%; }
 .term-host .xterm-viewport { background: #000 !important; }
 #terms {
+  display: none;
   flex: 1;
-  display: flex;
   flex-direction: column;
   min-height: 0;
 }
+
+/* When a live terminal is active, hide the line console and let the terminal
+   fill the whole area below the tab bar (full width + full remaining height),
+   so it isn't squished into half the viewport. */
+#app.pty #screen,
+#app.pty #footer { display: none; }
+#app.pty #terms {
+  display: flex;
+  flex: 1;
+  position: static;
+  inset: auto;
+  z-index: auto;
+  background: #000;
+}
+#app.pty .term-host {
+  display: block !important;
+  position: relative;
+  inset: auto;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  flex: 1;
+}
+/* On touch devices keep the soft-key bar reachable at the bottom. */
+body.touch #app.pty #footer { display: flex; }
 
 #footer {
   background: var(--panel);

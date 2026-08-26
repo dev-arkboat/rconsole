@@ -6,6 +6,7 @@ websockets attach/detach without killing the process; only an explicit kill
 long-running Discord bot survive page refreshes and tab switches, and lets the
 user re-attach to see where they left off.
 """
+import json
 import os
 import sys
 import threading
@@ -174,8 +175,20 @@ class TermSession:
             self._append("\r\n*** terminal session ended ***\r\n")
         except Exception:
             pass
+        # Tell the client the process has exited so it can automatically return
+        # to the line console instead of leaving the user stuck in the terminal
+        # view (the "ws") with a dead session.
         try:
-            self._broadcast("\r\n*** terminal session ended ***\r\n")
+            self._broadcast(json.dumps({"t": "exit"}))
+        except Exception:
+            pass
+        # A finished session can't be usefully re-attached, so tear it down
+        # server-side too (drop the in-memory session and the persisted tab).
+        try:
+            import state as _state
+            with SESSIONS_LOCK:
+                SESSIONS.pop((self.sid, self.tab_id), None)
+            _state.remove_tab(self.sid, self.tab_id)
         except Exception:
             pass
         try:
