@@ -272,8 +272,12 @@ def ws_terminal(ws):
     ptyhost.attach(ws, username, tab_id, cmd, tab["cwd"], cols, rows)
 
 
+# Seed the default user at import time so login works regardless of how the app
+# is launched (gunicorn/WSGI on Render never triggers the __main__ block).
+auth.seed_defaults()
+
+
 def main():
-    auth.seed_defaults()
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
 
