@@ -216,8 +216,7 @@ body.touch #app.pty #footer { display: flex; }
   display: none;
   gap: 6px;
   padding: 6px 8px;
-  flex-wrap: wrap;
-  border-bottom: 1px solid var(--border);
+  align-items: center;
 }
 body.touch #keybar { display: flex; }
 
@@ -231,22 +230,40 @@ body.touch #keybar {
 }
 body.touch #keybar::-webkit-scrollbar { display: none; }
 
+#keybar .kb-group { display: flex; gap: 6px; align-items: center; }
+#keybar .kb-group + .kb-group { padding-left: 6px; border-left: 1px solid var(--border); }
+
 #keybar button {
-  background: #060a0e;
+  background: linear-gradient(180deg, #0c141d, #060a0e);
   border: 1px solid var(--border);
   color: var(--fg);
   font-family: inherit;
   font-size: 13px;
+  font-weight: 600;
   padding: 8px 12px;
-  border-radius: 6px;
+  border-radius: 8px;
   cursor: pointer;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
+  box-shadow: 0 1px 0 rgba(0,0,0,.4);
 }
-#keybar button:active { background: #11202c; }
-#keybar button.active {
+#keybar button:active {
+  background: var(--blue);
+  color: #04101c;
   border-color: var(--blue);
-  color: var(--blue);
+}
+/* Sticky Ctrl: clearly shows when the next key will be a control char. */
+#keybar button.active {
+  background: var(--blue);
+  color: #04101c;
+  border-color: var(--blue);
+  box-shadow: 0 0 0 2px rgba(109,179,255,.35);
+}
+#keybar .kb-arrows button {
+  min-width: 40px;
+  text-align: center;
+  font-size: 16px;
+  padding: 8px 10px;
 }
 #output {
   white-space: pre-wrap;

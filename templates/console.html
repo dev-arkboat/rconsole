@@ -26,13 +26,17 @@
     <div id="terms"></div>
     <div id="footer">
       <div id="keybar">
-        <button type="button" data-key="Tab" title="Tab">Tab</button>
-        <button type="button" data-key="Esc" title="Escape">Esc</button>
-        <button type="button" data-mod="ctrl" title="Ctrl (sticky)">Ctrl</button>
-        <button type="button" data-key="ArrowUp" title="Up">&#8593;</button>
-        <button type="button" data-key="ArrowDown" title="Down">&#8595;</button>
-        <button type="button" data-key="ArrowLeft" title="Left">&#8592;</button>
-        <button type="button" data-key="ArrowRight" title="Right">&#8594;</button>
+        <div class="kb-group">
+          <button type="button" data-key="Tab" title="Tab">Tab</button>
+          <button type="button" data-key="Esc" title="Escape">Esc</button>
+          <button type="button" data-mod="ctrl" title="Ctrl (next key)">Ctrl</button>
+        </div>
+        <div class="kb-group kb-arrows">
+          <button type="button" data-key="ArrowUp" title="Up">&#8593;</button>
+          <button type="button" data-key="ArrowDown" title="Down">&#8595;</button>
+          <button type="button" data-key="ArrowLeft" title="Left">&#8592;</button>
+          <button type="button" data-key="ArrowRight" title="Right">&#8594;</button>
+        </div>
       </div>
     </div>
   </div>

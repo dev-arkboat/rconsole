@@ -246,6 +246,16 @@ class TermSession:
             pass
 
     def resize(self, cols, rows):
+        try:
+            cols = int(cols)
+            rows = int(rows)
+        except (TypeError, ValueError):
+            return
+        # Ignore degenerate sizes (e.g. a transient 0x0 while the mobile soft
+        # keyboard animates open/closed) — setting the PTY to 0x0 can crash the
+        # child process such as nano and drop the user back to the console.
+        if cols <= 0 or rows <= 0:
+            return
         self.cols, self.rows = cols, rows
         try:
             if sys.platform == "win32":

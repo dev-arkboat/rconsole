@@ -80,6 +80,9 @@ function makeTab(opts) {
     termHost: null,
     isTerminal: !!opts.isTerminal,
     cmd: opts.cmd || "",
+    _exited: false,
+    _killed: false,
+    _reconnectTries: 0,
   };
   if (opts.first) {
     tab.lines.push({ text: "Rconsole — Made by MD ABU SALEHIN", cls: "term-green" });
@@ -128,6 +131,7 @@ function closeTab(id) {
   const idx = tabs.findIndex((t) => t.id === id);
   if (idx === -1) return;
   const t = tabs[idx];
+  t._killed = true;
   // A terminal tab's processes must be stopped when the user closes it. Tell
   // the server to kill the session (it pops the server-side tab too); a silent
   // disconnect would instead preserve the process so the user can return.
@@ -290,10 +294,18 @@ function sendPtyTo(t, d) {
 async function openPty(cmd, tabId) {
   const t = tabs.find((x) => x.id === tabId);
   if (!t || t.ptyActive) return;
+  // Tear down any prior terminal instance (e.g. when re-attaching after a
+  // transient websocket drop) so we don't leak hosts / observers / sockets.
+  if (t.term) { try { t.term.dispose(); } catch (e) { /* ignore */ } t.term = null; t.fitAddon = null; }
+  if (t.termRO) { try { t.termRO.disconnect(); } catch (e) { /* ignore */ } t.termRO = null; }
+  if (t.termHost && t.termHost.parentNode) t.termHost.parentNode.removeChild(t.termHost);
+  t.termHost = null;
   t.ptyActive = true;
   t.isTerminal = true;
   t.cmd = cmd;
   t.ptyText = "";
+  t._exited = false;
+  t._killed = false;
 
   const host = document.createElement("div");
   host.className = "term-host";
@@ -385,6 +397,7 @@ async function openPty(cmd, tabId) {
   t.ptyWs = ws;
 
   ws.onopen = () => {
+    t._reconnectTries = 0;
     ws.send(JSON.stringify({ t: "resize", cols: t.term.cols, rows: t.term.rows }));
   };
   ws.onmessage = (e) => {
@@ -402,8 +415,26 @@ async function openPty(cmd, tabId) {
     if (t.ptyText !== undefined) t.ptyText += e.data;
     t.term.write(e.data);
   };
-  ws.onclose = () => closePty(tabId);
-  ws.onerror = () => closePty(tabId);
+  ws.onclose = () => {
+    // The process really ended (server told us) or the user killed it: drop to
+    // the line console normally.
+    if (t._exited || t._killed) { closePty(tabId); return; }
+    // Transient disconnect (network blip, mobile backgrounding, keyboard
+    // animation). Re-attach the still-living server session instead of stranding
+    // the user in the line console mid-edit.
+    t.ptyActive = false;
+    t.ptyWs = null;
+    t._reconnectTries = (t._reconnectTries || 0) + 1;
+    if (t._reconnectTries <= 5) {
+      setTimeout(() => {
+        const cur = tabs.find((x) => x.id === tabId);
+        if (cur && !cur._killed && activeTab() === cur) openPty(cur.cmd, tabId);
+      }, 700 * t._reconnectTries);
+    } else {
+      closePty(tabId);
+    }
+  };
+  ws.onerror = ws.onclose;
 
   t.term.onData((d) => {
     // Sticky Ctrl: the next typed letter is sent as a control character.
@@ -426,6 +457,8 @@ function onPtyResize() {
     resizeRaf = null;
     const t = activeTab();
     if (!t || !t.ptyActive || !t.term || !t.fitAddon) return;
+    // Never push a degenerate size to the backend (can kill the child).
+    if (t.term.cols <= 0 || t.term.rows <= 0) return;
     try {
       t.fitAddon.fit();
       if (t.ptyWs && t.ptyWs.readyState === 1) {
@@ -483,6 +516,7 @@ function stripAnsi(s) {
 function onPtyExit(tabId) {
   const t = tabs.find((x) => x.id === tabId);
   if (!t) return;
+  t._exited = true;
   if (t.ptyText) {
     const lines = stripAnsi(t.ptyText).replace(/\r/g, "").split("\n");
     for (const l of lines) {
@@ -600,12 +634,17 @@ function insertAtCursor(text) {
 }
 
 let ctrlActive = false;
+let ctrlResetTimer = null;
 const elKeybar = document.getElementById("keybar");
 
 function setCtrl(active) {
   ctrlActive = active;
   const btn = elKeybar.querySelector('[data-mod="ctrl"]');
   if (btn) btn.classList.toggle("active", active);
+  if (ctrlResetTimer) { clearTimeout(ctrlResetTimer); ctrlResetTimer = null; }
+  // Auto-release the sticky modifier so it can never get "stuck" and turn the
+  // next normal keystroke into a control char (e.g. Ctrl+X quitting nano).
+  if (active) ctrlResetTimer = setTimeout(() => setCtrl(false), 3000);
 }
 
 function sendPty(d) {
@@ -692,10 +731,12 @@ function doKeybarAction(b) {
 
 // pointerdown + preventDefault keeps the text input focused (and the soft
 // keyboard open) when a key-bar button is tapped, and removes the tap delay.
-elKeybar.addEventListener("pointerdown", (e) => {
+// Use click (not pointerdown+preventDefault): on mobile a tap is a valid user
+// gesture that lets the soft keyboard open/remain, whereas preventDefault can
+// swallow the gesture and leave the keyboard shut so taps appear to do nothing.
+elKeybar.addEventListener("click", (e) => {
   const b = e.target.closest("button");
   if (!b) return;
-  e.preventDefault();
   doKeybarAction(b);
 });
 
