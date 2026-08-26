@@ -19,6 +19,13 @@ html, body {
   color: var(--fg);
   font-family: "JetBrains Mono", "Fira Code", Consolas, "Courier New", monospace;
   font-size: 14px;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* Kill the 300ms tap delay and the iOS double-tap zoom everywhere tappable. */
+#newtab, .tab, #keybar button, #cmd {
+  touch-action: manipulation;
 }
 
 .login-body {
@@ -33,6 +40,8 @@ html, body {
   border-radius: 10px;
   padding: 28px 34px;
   width: 360px;
+  max-width: 100%;
+  margin: 0 16px;
   box-shadow: 0 10px 40px rgba(0,0,0,.5);
 }
 .login-logo {
@@ -66,6 +75,7 @@ html, body {
   padding: 10px;
   border-radius: 6px;
   font-family: inherit;
+  font-size: 16px;
   outline: none;
 }
 .login-box input:focus { border-color: var(--blue); }
@@ -77,6 +87,7 @@ html, body {
   color: #06140b;
   font-weight: 700;
   letter-spacing: 2px;
+  font-size: 16px;
   border: none;
   border-radius: 6px;
   cursor: pointer;
@@ -98,13 +109,20 @@ html, body {
   margin-top: 16px;
 }
 
-#app { display: flex; flex-direction: column; height: 100vh; }
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+  overscroll-behavior: contain;
+}
 
 #tabbar {
   display: flex;
   align-items: stretch;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
+  padding-top: env(safe-area-inset-top, 0px);
 }
 #tabs { display: flex; flex: 1; overflow-x: auto; }
 .tab {
@@ -136,6 +154,8 @@ html, body {
   flex-direction: column;
   padding: 12px 14px;
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   background: var(--bg);
 }
 
@@ -189,6 +209,11 @@ body.touch #app.pty #footer { display: flex; }
 #footer {
   background: var(--panel);
   border-top: 1px solid var(--border);
+  /* Keep the input bar on its own compositor layer so it tracks the soft
+     keyboard smoothly instead of repainting the whole page. */
+  transform: translateZ(0);
+  will-change: transform;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 #keybar {
@@ -199,6 +224,16 @@ body.touch #app.pty #footer { display: flex; }
   border-bottom: 1px solid var(--border);
 }
 body.touch #keybar { display: flex; }
+
+/* On touch keep the key bar a single scrollable row so it doesn't wrap and eat
+   the already-tiny vertical space the terminal needs. */
+body.touch #keybar {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+body.touch #keybar::-webkit-scrollbar { display: none; }
 
 #keybar button {
   background: #060a0e;
@@ -217,7 +252,12 @@ body.touch #keybar { display: flex; }
   border-color: var(--blue);
   color: var(--blue);
 }
-#output { white-space: pre-wrap; word-break: break-word; }
+#output {
+  white-space: pre-wrap;
+  word-break: break-word;
+  /* Isolate the scrollback's layout/paint from the rest of the page. */
+  contain: content;
+}
 #output .line { min-height: 1em; }
 
 #promptline {
@@ -238,8 +278,27 @@ body.touch #keybar { display: flex; }
   padding: 0 8px;
 }
 
+/* iOS/Android auto-zoom the page when a focused input is < 16px, which reads as
+   input lag and makes the caret jump. Fix the font size on touch devices. */
+body.touch #cmd { font-size: 16px; padding: 4px 8px; }
+
+/* Bigger, friendlier tap targets for the touch key bar. */
+body.touch #keybar button { font-size: 15px; padding: 12px 14px; min-width: 44px; }
+body.touch #newtab { width: 52px; font-size: 24px; }
+
 .term-red { color: var(--red); }
 .term-green { color: var(--green); }
 .term-blue { color: var(--blue); }
 .term-amber { color: var(--amber); }
 .term-dim { color: var(--dim); }
+
+/* ---------------------------------------------------------------------------
+   Small screens: tighten spacing so the terminal/console keeps as much room
+   as possible, and keep the prompt aligned with the larger touch input.
+   --------------------------------------------------------------------------- */
+@media (max-width: 480px) {
+  #screen { padding: 8px 10px; }
+  body.touch #prompt { font-size: 15px; }
+  .login-body { padding: env(safe-area-inset-top, 0px) 0 env(safe-area-inset-bottom, 0px); }
+  .login-box { padding: 22px 20px; }
+}

@@ -1,4 +1,6 @@
-"""srconsole — a Flask-powered simulated Linux console with hosted apps."""
+"""rconsole — a Flask-powered simulated Linux console with hosted apps."""
+import gzip
+import io
 import os
 import secrets
 import time
@@ -23,9 +25,61 @@ app.secret_key = os.environ.get("RCONSOLE_SECRET", secrets.token_hex(32))
 # state is keyed by username and survives it.
 app.permanent_session_lifetime = timedelta(days=30)
 
+# Static assets (xterm.js, console.js, css) change only on deploy, so let the
+# browser cache them for a long time. They're not content-hashed, so a week is
+# a safe compromise between repeat-visit speed and not serving stale bundles.
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 7 * 24 * 3600
+
 SESSION_TIMEOUT = 30 * 24 * 3600  # seconds of inactivity before forced re-login
 HOSTS = state.ACTIVE_HOSTS
 sock = Sock(app)
+
+
+# ---------------------------------------------------------------------------
+# Response optimizations: gzip compress text responses (HTML/JS/CSS/JSON) and
+# add basic security/optimization headers. Skips websocket upgrades and
+# responses that are already encoded (e.g. proxied gzip from a hosted app).
+# ---------------------------------------------------------------------------
+_GZIP_TYPES = (
+    "text/", "javascript", "json", "css", "html", "svg", "xml", "font",
+)
+_GZIP_THRESHOLD = 1024
+
+
+@app.after_request
+def optimize_response(resp):
+    # Basic hardening headers (cheap, helps caching/proxy behaviour).
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("Referrer-Policy", "no-referrer")
+
+    # Never touch the websocket upgrade or already-compressed payloads.
+    if resp.status_code == 101 or resp.headers.get("Content-Encoding"):
+        return resp
+
+    accept = request.headers.get("Accept-Encoding", "")
+    if "gzip" not in accept.lower():
+        return resp
+
+    ctype = resp.headers.get("Content-Type", "") or ""
+    if not any(t in ctype for t in _GZIP_TYPES):
+        return resp
+
+    try:
+        # Flask serves static files with direct_passthrough; flip it so we can
+        # read (and replace) the body for compression.
+        resp.direct_passthrough = False
+        data = resp.get_data()
+    except Exception:
+        return resp
+    if data is None or len(data) < _GZIP_THRESHOLD:
+        return resp
+
+    compressed = gzip.compress(data, 6)
+    resp.set_data(compressed)
+    resp.headers["Content-Encoding"] = "gzip"
+    resp.headers["Content-Length"] = str(len(compressed))
+    resp.headers["Vary"] = "Accept-Encoding"
+    return resp
 
 
 def restore_terminal_sessions(username):
@@ -279,7 +333,9 @@ auth.seed_defaults()
 
 def main():
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    # Threaded so a long-lived terminal websocket doesn't block other requests
+    # (other tabs' commands, API calls) on the dev server.
+    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
 
 
 if __name__ == "__main__":

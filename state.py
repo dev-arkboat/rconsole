@@ -6,8 +6,10 @@ restored to exactly where they left off. Tab metadata is persisted to disk so it
 survives a server restart; long-running terminal sessions are re-spawned on
 login when their process is no longer alive.
 """
+import atexit
 import json
 import threading
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -16,6 +18,13 @@ STATE_DIR = DATA / "state"
 
 STATE = {}  # username -> {"tabs": {...}, "hosts": {...}}
 STATE_LOCK = threading.Lock()
+
+# Persistence is debounced: per-command writes (history/cwd) only mark a user
+# dirty and a background thread flushes them at most every few seconds, so a
+# request thread never blocks on disk I/O. Structural changes call save_now().
+_dirty = set()
+_flush_lock = threading.Lock()
+_flusher_started = False
 
 
 def default_cwd():
@@ -30,7 +39,7 @@ def _state_path(username):
     return STATE_DIR / f"{safe}.json"
 
 
-def save(username):
+def _write(username):
     sess = STATE.get(username)
     if not sess:
         return
@@ -41,6 +50,53 @@ def save(username):
             }, f)
     except Exception:
         pass
+
+
+def _flush_loop():
+    while True:
+        time.sleep(2)
+        with _flush_lock:
+            users = list(_dirty)
+            _dirty.clear()
+        for u in users:
+            try:
+                _write(u)
+            except Exception:
+                pass
+
+
+def _ensure_flusher():
+    global _flusher_started
+    if _flusher_started:
+        return
+    _flusher_started = True
+    threading.Thread(target=_flush_loop, daemon=True).start()
+
+
+def save(username):
+    """Mark state dirty; flushed to disk asynchronously (debounced)."""
+    with _flush_lock:
+        _dirty.add(username)
+    _ensure_flusher()
+
+
+def save_now(username):
+    """Persist immediately (structural changes that must survive a restart)."""
+    _write(username)
+
+
+def flush_all():
+    with _flush_lock:
+        users = list(_dirty)
+        _dirty.clear()
+    for u in users:
+        try:
+            _write(u)
+        except Exception:
+            pass
+
+
+atexit.register(flush_all)
 
 
 def _tab_persist(t):
@@ -103,7 +159,7 @@ def ensure_tab(sess, username, tab_id):
             "gen": None,
             "prompt": None,
         }
-        save(username)
+        save_now(username)
     return sess["tabs"][tab_id]
 
 
@@ -113,7 +169,7 @@ def set_terminal(sess, username, tab_id, cmd, cwd):
     tab["isTerminal"] = True
     tab["cmd"] = cmd
     tab["cwd"] = cwd
-    save(username)
+    save_now(username)
     return tab
 
 
@@ -121,7 +177,7 @@ def remove_tab(username, tab_id):
     sess = STATE.get(username)
     if sess and tab_id in sess["tabs"]:
         sess["tabs"].pop(tab_id, None)
-        save(username)
+        save_now(username)
 
 
 # --------------------------------------------------------------------------- hosts

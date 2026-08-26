@@ -4,6 +4,32 @@ const USER = window.RCONSOLE_USER || "user";
 let tabs = [];
 let activeId = null;
 
+// ---------------------------------------------------------------------------
+// xterm.js is heavy and only needed for live terminal tabs (nano, vim, REPLs).
+// Load it on demand (once) so line-mode users don't pay the download/parse or
+// memory cost on first paint. Consoles then cache it for subsequent visits.
+// ---------------------------------------------------------------------------
+let xtermLoad = null;
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = src;
+    s.onload = resolve;
+    s.onerror = () => reject(new Error("failed to load " + src));
+    document.head.appendChild(s);
+  });
+}
+function ensureXterm() {
+  if (window.Terminal && window.FitAddon) return Promise.resolve();
+  if (!xtermLoad) {
+    xtermLoad = Promise.all([
+      loadScript("/static/xterm.js"),
+      loadScript("/static/addon-fit.js"),
+    ]);
+  }
+  return xtermLoad;
+}
+
 const elTabs = document.getElementById("tabs");
 const elNew = document.getElementById("newtab");
 const elOutput = document.getElementById("output");
@@ -143,15 +169,28 @@ function selectTab(id) {
   if (!isPtyActive() && elCmd) elCmd.focus();
 }
 
+function appendLineEl(ln) {
+  const div = document.createElement("div");
+  div.className = "line" + (ln.cls ? " " + ln.cls : "");
+  div.textContent = ln.text;
+  elOutput.appendChild(div);
+}
+
 function renderOutput() {
   const t = activeTab();
-  elOutput.innerHTML = "";
-  t.lines.forEach((ln) => {
-    const div = document.createElement("div");
-    div.className = "line" + (ln.cls ? " " + ln.cls : "");
-    div.textContent = ln.text;
-    elOutput.appendChild(div);
-  });
+  // Only rebuild the whole DOM when the line list itself changed (tab switch
+  // or clear). Otherwise append just the lines added since the last render —
+  // this keeps long sessions smooth instead of re-parsing every line each time.
+  if (t._renderedLines !== t.lines) {
+    elOutput.innerHTML = "";
+    t.lines.forEach(appendLineEl);
+    t._renderedLines = t.lines;
+  } else {
+    for (let i = t._renderedCount || 0; i < t.lines.length; i++) {
+      appendLineEl(t.lines[i]);
+    }
+  }
+  t._renderedCount = t.lines.length;
   // prompt
   if (t.interactive) {
     elPrompt.textContent = t.interactivePrompt;
@@ -160,15 +199,30 @@ function renderOutput() {
     elPrompt.textContent = promptText(t.cwd);
     elPrompt.className = "";
   }
-  elOutput.parentElement.scrollTop = elOutput.parentElement.scrollHeight;
-  elCmd.focus();
+  const sc = elOutput.parentElement;
+  sc.scrollTop = sc.scrollHeight;
+  // Return focus to the input only when the user is already there, so we don't
+  // yank focus (and re-open the soft keyboard) on every render on mobile.
+  if (!isPtyActive() &&
+      (document.activeElement === elCmd || document.activeElement === document.body)) {
+    elCmd.focus({ preventScroll: true });
+  }
 }
 
 function appendLines(text, cls) {
   if (text === undefined || text === null) return;
+  const t = activeTab();
   String(text).split("\n").forEach((l) => {
-    activeTab().lines.push({ text: l === "" ? " " : l, cls: cls || "" });
+    t.lines.push({ text: l === "" ? " " : l, cls: cls || "" });
   });
+  // Bound the scrollback so very long sessions don't grow the DOM/memory
+  // without limit (which would eventually make every render janky). Trim
+  // occasionally and force a single rebuild rather than per-line.
+  const CAP = 4000;
+  if (t.lines.length > CAP) {
+    t.lines.splice(0, t.lines.length - CAP);
+    t._renderedLines = null;
+  }
 }
 
 async function send(cmd) {
@@ -233,7 +287,7 @@ function sendPtyTo(t, d) {
   }
 }
 
-function openPty(cmd, tabId) {
+async function openPty(cmd, tabId) {
   const t = tabs.find((x) => x.id === tabId);
   if (!t || t.ptyActive) return;
   t.ptyActive = true;
@@ -247,8 +301,24 @@ function openPty(cmd, tabId) {
   document.getElementById("terms").appendChild(host);
   t.termHost = host;
 
+  // Defer terminal setup until xterm.js (lazy-loaded) is available.
+  try {
+    await ensureXterm();
+  } catch (e) {
+    t.ptyActive = false;
+    activeTab().lines.push({ text: "Failed to load terminal components.", cls: "term-red" });
+    renderOutput();
+    elCmd.focus();
+    return;
+  }
+
+  const Terminal = window.Terminal;
+  const FitAddon = window.FitAddon;
   t.term = new Terminal({
     cursorBlink: true,
+    // Canvas renderer is dramatically faster than the DOM renderer for
+    // full-screen TUIs like nano/vim — it's what keeps typing responsive.
+    rendererType: "canvas",
     fontSize: 14,
     fontFamily: "Consolas, 'Courier New', monospace",
     theme: { background: "#000000", foreground: "#d6e2ef" },
@@ -257,16 +327,35 @@ function openPty(cmd, tabId) {
   t.term.loadAddon(t.fitAddon);
   t.term.open(host);
 
+  // xterm captures keystrokes through its own hidden textarea. On mobile that
+  // textarea inherits the browser's autocorrect/autocapitalize and (on iOS)
+  // triggers zoom-on-focus — both add latency and mangle editor input. Harden
+  // it the same way we did for the line-mode input.
+  const ta = t.term.textarea;
+  if (ta) {
+    ta.setAttribute("autocomplete", "off");
+    ta.setAttribute("autocorrect", "off");
+    ta.setAttribute("autocapitalize", "off");
+    ta.setAttribute("spellcheck", "false");
+    ta.style.fontSize = "16px";
+  }
+
   // Fit whenever the terminal box changes size (initial show, window resize,
   // or the mobile soft-keyboard opening/closing) so it always fills the width.
+  let fitScheduled = false;
   const doFit = () => {
-    // Skip when the host is hidden (display:none) so we never tell the backend
-    // to resize a terminal to 0x0, which can break running programs.
-    if (host.clientWidth === 0 || host.clientHeight === 0) return;
-    try { t.fitAddon.fit(); } catch (e) { /* ignore */ }
-    if (t.ptyWs && t.ptyWs.readyState === 1) {
-      t.ptyWs.send(JSON.stringify({ t: "resize", cols: t.term.cols, rows: t.term.rows }));
-    }
+    if (fitScheduled) return;
+    fitScheduled = true;
+    requestAnimationFrame(() => {
+      fitScheduled = false;
+      // Skip when the host is hidden (display:none) so we never tell the backend
+      // to resize a terminal to 0x0, which can break running programs.
+      if (host.clientWidth === 0 || host.clientHeight === 0) return;
+      try { t.fitAddon.fit(); } catch (e) { /* ignore */ }
+      if (t.ptyWs && t.ptyWs.readyState === 1) {
+        t.ptyWs.send(JSON.stringify({ t: "resize", cols: t.term.cols, rows: t.term.rows }));
+      }
+    });
   };
   const ro = new ResizeObserver(doFit);
   ro.observe(host);
@@ -321,17 +410,22 @@ function openPty(cmd, tabId) {
   updateView();
 }
 
+let resizeRaf = null;
 function onPtyResize() {
-  const t = activeTab();
-  if (!t || !t.ptyActive || !t.term || !t.fitAddon) return;
-  try {
-    t.fitAddon.fit();
-    if (t.ptyWs && t.ptyWs.readyState === 1) {
-      t.ptyWs.send(
-        JSON.stringify({ t: "resize", cols: t.term.cols, rows: t.term.rows })
-      );
-    }
-  } catch (e) { /* ignore */ }
+  if (resizeRaf) return;
+  resizeRaf = requestAnimationFrame(() => {
+    resizeRaf = null;
+    const t = activeTab();
+    if (!t || !t.ptyActive || !t.term || !t.fitAddon) return;
+    try {
+      t.fitAddon.fit();
+      if (t.ptyWs && t.ptyWs.readyState === 1) {
+        t.ptyWs.send(
+          JSON.stringify({ t: "resize", cols: t.term.cols, rows: t.term.rows })
+        );
+      }
+    } catch (e) { /* ignore */ }
+  });
 }
 
 function closePty(tabId) {
@@ -415,24 +509,34 @@ function updateView() {
   }
 }
 
+function submitCmd() {
+  const t = activeTab();
+  const val = elCmd.value;
+  elCmd.value = "";
+  // echo the command (or the interactive answer) to output
+  if (t.interactive) {
+    t.lines.push({ text: t.interactivePrompt + val, cls: "term-amber" });
+  } else {
+    if (val.trim() !== "") {
+      t.hist.push(val);
+      t.histIdx = t.hist.length;
+    }
+    t.lines.push({ text: promptText(t.cwd) + val });
+  }
+  renderOutput();
+  send(val);
+}
+
+// A <form> submit reliably catches the Enter key from mobile soft keyboards,
+// which don't always emit a clean keydown "Enter" event.
+document.getElementById("promptform").addEventListener("submit", (e) => {
+  e.preventDefault();
+  submitCmd();
+});
+
 elCmd.addEventListener("keydown", (e) => {
   const t = activeTab();
-  if (e.key === "Enter") {
-    const val = elCmd.value;
-    elCmd.value = "";
-    // echo the command (or the interactive answer) to output
-    if (t.interactive) {
-      t.lines.push({ text: t.interactivePrompt + val, cls: "term-amber" });
-    } else {
-      if (val.trim() !== "") {
-        t.hist.push(val);
-        t.histIdx = t.hist.length;
-      }
-      t.lines.push({ text: promptText(t.cwd) + val });
-    }
-    renderOutput();
-    send(val);
-  } else if (e.key === "ArrowUp" && !t.interactive) {
+  if (e.key === "ArrowUp" && !t.interactive) {
     if (t.histIdx > 0) {
       t.histIdx -= 1;
       elCmd.value = t.hist[t.histIdx] || "";
@@ -453,6 +557,10 @@ elCmd.addEventListener("keydown", (e) => {
 elNew.onclick = () => newTab();
 document.getElementById("screen").addEventListener("click", () => elCmd.focus());
 
+elCmd.addEventListener("focus", () => {
+  elCmd.scrollIntoView({ block: "nearest", behavior: "auto" });
+});
+
 // ---------------------------------------------------------------------------
 // Mobile key bar: Tab / Esc / Ctrl / arrow buttons for touch keyboards.
 // ---------------------------------------------------------------------------
@@ -463,11 +571,15 @@ if (window.matchMedia && (window.matchMedia("(max-width: 768px)").matches ||
 
 // Keep the footer (input + key bar) visible above the soft keyboard by sizing
 // #app to the visible viewport rather than the full window height.
+let vpRaf = null;
 function fitToViewport() {
   const vv = window.visualViewport;
   if (!vv) return;
-  document.getElementById("app").style.height = vv.height + "px";
-  onPtyResize();
+  if (vpRaf) cancelAnimationFrame(vpRaf);
+  vpRaf = requestAnimationFrame(() => {
+    document.getElementById("app").style.height = vv.height + "px";
+    onPtyResize();
+  });
 }
 if (window.visualViewport) {
   window.visualViewport.addEventListener("resize", fitToViewport);
@@ -516,11 +628,38 @@ function handlePtyKey(b) {
     }[key];
     sendPtyTo(t, seq);
   }
+  if (t.term) t.term.focus();
 }
 
-elKeybar.addEventListener("click", (e) => {
-  const b = e.target.closest("button");
-  if (!b) return;
+function moveCursor(delta) {
+  const p = elCmd.selectionStart ?? elCmd.value.length;
+  const np = Math.max(0, Math.min(elCmd.value.length, p + delta));
+  elCmd.selectionStart = elCmd.selectionEnd = np;
+}
+
+function historyNav(dir) {
+  const t = activeTab();
+  if (t.interactive) return;
+  if (dir < 0) {
+    if (t.histIdx > 0) {
+      t.histIdx -= 1;
+      elCmd.value = t.hist[t.histIdx] || "";
+    }
+  } else {
+    if (t.histIdx < t.hist.length - 1) {
+      t.histIdx += 1;
+      elCmd.value = t.hist[t.histIdx] || "";
+    } else {
+      t.histIdx = t.hist.length;
+      elCmd.value = "";
+    }
+  }
+  const end = elCmd.value.length;
+  elCmd.selectionStart = elCmd.selectionEnd = end;
+}
+
+function doKeybarAction(b) {
+  const t = activeTab();
   if (isPtyActive()) {
     handlePtyKey(b);
     return;
@@ -531,16 +670,28 @@ elKeybar.addEventListener("click", (e) => {
       insertAtCursor("\t");
     } else if (key === "Esc") {
       elCmd.value = "";
-    } else {
-      // Arrow keys: forward a real keydown so history/cursor logic runs.
-      elCmd.dispatchEvent(new KeyboardEvent("keydown", {
-        key, bubbles: true, cancelable: true,
-      }));
+    } else if (key === "ArrowLeft") {
+      moveCursor(-1);
+    } else if (key === "ArrowRight") {
+      moveCursor(1);
+    } else if (key === "ArrowUp") {
+      historyNav(-1);
+    } else if (key === "ArrowDown") {
+      historyNav(1);
     }
-    elCmd.focus();
+    elCmd.focus({ preventScroll: true });
   } else if (b.dataset.mod === "ctrl") {
     setCtrl(!ctrlActive);
   }
+}
+
+// pointerdown + preventDefault keeps the text input focused (and the soft
+// keyboard open) when a key-bar button is tapped, and removes the tap delay.
+elKeybar.addEventListener("pointerdown", (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  e.preventDefault();
+  doKeybarAction(b);
 });
 
 // When Ctrl is held (sticky), forward modifier state on physical keystrokes so

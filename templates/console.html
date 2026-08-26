@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>rconsole — {{ username }}@rconsole</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='xterm.css') }}">
@@ -15,10 +15,13 @@
     </div>
     <div id="screen">
       <div id="output"></div>
-      <div id="promptline">
-        <span id="prompt"></span>
-        <input id="cmd" type="text" autocomplete="off" spellcheck="false" autofocus>
-      </div>
+      <form id="promptform" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+        <div id="promptline">
+          <span id="prompt"></span>
+          <input id="cmd" type="text" autocomplete="off" autocorrect="off"
+                 autocapitalize="off" spellcheck="false" inputmode="text" autofocus>
+        </div>
+      </form>
     </div>
     <div id="terms"></div>
     <div id="footer">
@@ -34,8 +37,6 @@
     </div>
   </div>
   <script>window.RCONSOLE_USER = "{{ username }}";</script>
-  <script src="{{ url_for('static', filename='xterm.js') }}"></script>
-  <script src="{{ url_for('static', filename='addon-fit.js') }}"></script>
-  <script src="{{ url_for('static', filename='console.js') }}"></script>
+  <script src="{{ url_for('static', filename='console.js') }}" defer></script>
 </body>
 </html>
