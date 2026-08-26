@@ -1,0 +1,13 @@
+[project]
+name = "rconsole"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "flask>=3.1.3",
+    "flask-sock>=0.7.0",
+    "gunicorn>=26.2.0",
+    "pywinpty>=3.0.5; sys_platform == 'win32'",
+    "requests>=2.34.2",
+]

@@ -1,0 +1,19 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info/
+
+# Virtual environments
+.venv/
+.ruff_cache/
+
+# Runtime data (user store) and logs
+data/
+*.log
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db

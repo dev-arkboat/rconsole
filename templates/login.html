@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>rconsole — login</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="login-body">
+  <div class="login-box">
+    <pre class="login-logo">
+  _________      .__         .__    .__        
+ /   _____/____  |  |   ____ |  |__ |__| ____  
+ \_____  \\__  \ |  | _/ __ \|  |  \|  |/    \ 
+ /        \/ __ \|  |_\  ___/|   Y  \  |   |  \
+/_______  (____  /____/\___  >___|  /__|___|  /
+        \/     \/          \/     \/        \/ 
+    </pre>
+    <p class="login-sub">simulated linux console — sign in</p>
+    {% if error %}<div class="login-error">{{ error }}</div>{% endif %}
+    <form method="post" autocomplete="off">
+      <label>Username</label>
+      <input name="username" value="" autofocus required>
+      <label>Password</label>
+      <input name="password" type="password" required>
+      <button type="submit">LOGIN</button>
+    </form>
+    <!--<p class="login-hint">default credentials — user: <b>ark</b> &nbsp; pass: <b>ark</b></p> -->
+  </div>
+</body>
+</html>
