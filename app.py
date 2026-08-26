@@ -23,7 +23,7 @@ app.secret_key = os.environ.get("RCONSOLE_SECRET", secrets.token_hex(32))
 # Long-lived sessions: a user should be able to return days later and log back
 # in to the exact same state. Forced logout only clears the cookie; server-side
 # state is keyed by username and survives it.
-app.permanent_session_lifetime = timedelta(days=30)
+app.permanent_session_lifetime = timedelta(days=360)
 
 # Static assets (xterm.js, console.js, css) change only on deploy, so let the
 # browser cache them for a long time. They're not content-hashed, so a week is

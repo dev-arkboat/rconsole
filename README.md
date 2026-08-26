@@ -149,6 +149,11 @@ The editor opens in the terminal. When you quit (`^X`), the PTY session ends
 and you are returned to the line-mode console. Resize the browser window and
 the terminal refits automatically.
 
+While any interactive PTY session (e.g. `python`, `vim`, `top`) is running,
+press **`Esc`** (or the keybar `Esc` button) to detach immediately and drop
+back to the line-mode console — the underlying process is terminated. `Ctrl+C`
+(`^C` on the keybar) still sends a normal interrupt into the program.
+
 Everything else (e.g. `ls`, `pwd`, `mkdir`, `cat`, `rm`, `echo`, `git status`,
 `pip`, `apt`) is executed on the real host and its output captured and returned
 (in a 60-second timeout sandbox).

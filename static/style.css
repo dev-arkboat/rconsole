@@ -268,6 +268,7 @@ body.touch #keybar::-webkit-scrollbar { display: none; }
 #output {
   white-space: pre-wrap;
   word-break: break-word;
+  overflow-wrap: anywhere;
   /* Isolate the scrollback's layout/paint from the rest of the page. */
   contain: content;
 }

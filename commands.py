@@ -66,27 +66,40 @@ def _parse_port(args):
 
 @command("help")
 def cmd_help(ctx, args):
-    std = ["help", "clear", "cd", "history", "rwhoami", "edit", "fm"]
-    sudo_cmds = sorted(PROTECTED)
-    out = ["Console-native commands (stateful / auth / hosting):", ""]
-    out.append("  " + "  ".join(std))
+    std = [
+        ("help", "this help"),
+        ("clear", "clear the screen"),
+        ("cd <dir>", "change directory (stateful)"),
+        ("history", "command history for this tab"),
+        ("rwhoami", "print the current user"),
+        ("edit <file>", "built-in code editor (great on phones)"),
+        ("fm [path]", "in-console file manager + editor"),
+    ]
+    sudo = [
+        ("sudo serve <port>", "host cwd as a static site"),
+        ("sudo gunicorn <spec> -b :p", "host a WSGI app"),
+        ("sudo cpass / cuser", "change password / rename user"),
+        ("sudo muser / ruser", "create / delete a user"),
+        ("sudo suser / auser / nauser", "list / grant / revoke admin"),
+        ("sudo rboot", "factory reset (kill hosts, reset users)"),
+    ]
+    out = ["Console commands (type a name, then Enter):", ""]
+    for name, desc in std:
+        out.append(f"  {name:<16} {desc}")
     out.append("")
-    out.append("  edit <file>   built-in code editor (highlighting, mobile-friendly)")
-    out.append("  fm [path]     in-console file manager + editor")
+    out.append("Admin commands (need 'sudo'):")
+    for name, desc in sudo:
+        out.append(f"  {name:<28} {desc}")
     out.append("")
-    out.append("Commands requiring 'sudo' (admin only):")
-    out.append("  " + "  ".join(sudo_cmds))
+    out.append("Any other command runs on the REAL host shell:")
+    out.append("  ls  pwd  mkdir  cat  rm  cp  mv  echo  whoami  id")
+    out.append("  python  pip  git  apt  ...    (cd is native & stateful)")
     out.append("")
-    out.append("Everything else runs on the REAL host shell,")
-    out.append("e.g.  ls  pwd  mkdir  cat  rm  cp  mv  echo  whoami  id")
-    out.append("      python  pip  git  apt  ...   (cd is native & stateful)")
+    out.append("Hosting is served at /<folder>/<port>/ through rconsole's proxy,")
+    out.append("so no extra port-forwarding is needed.")
     out.append("")
-    out.append("For a smooth phone editing experience use 'edit'/'fm' instead of")
-    out.append("a PTY editor like nano (the soft keyboard + xterm can be fragile).")
-    out.append("")
-    out.append("Hosting (sudo):")
-    out.append("  sudo serve <port>                      -> serve cwd at /<folder>/<port>/")
-    out.append("  sudo gunicorn app:app -b :<port>       -> same, for WSGI apps")
+    out.append("On a phone, prefer 'edit'/'fm' over nano/vim: the soft keyboard")
+    out.append("plus xterm can be fragile for full-screen TUIs.")
     return "\n".join(out)
 
 

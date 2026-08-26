@@ -445,7 +445,37 @@ async function openPty(cmd, tabId) {
     sendPtyTo(t, d);
   });
 
+  // Esc while a PTY is live detaches the session and returns to the line-mode
+  // console. Captured on the host in the capture phase so it fires before
+  // xterm's own textarea listener and the ESC byte never reaches the child.
+  host.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      userExitPty(tabId);
+    }
+  }, true);
+
   updateView();
+}
+
+// The user pressed Ctrl+C (or the keybar ^C) inside a live PTY: terminate the
+// session and drop back to the line console so they aren't stranded in the
+// dead/running terminal. Output is not captured — this is an explicit detach.
+function userExitPty(tabId) {
+  const t = tabs.find((x) => x.id === tabId);
+  if (!t || !t.ptyActive) return;
+  t._killed = true;
+  if (t.ptyWs && t.ptyWs.readyState === 1) {
+    try { t.ptyWs.send(JSON.stringify({ t: "kill" })); } catch (e) { /* ignore */ }
+  }
+  t.isTerminal = false;
+  t.cmd = "";
+  t.ptyText = "";
+  closePty(tabId);
+  renderOutput();
+  updateView();
+  elCmd.focus();
 }
 
 let resizeRaf = null;
@@ -661,6 +691,12 @@ function handlePtyKey(b) {
   const t = activeTab();
   if (!t || !t.ptyActive) return;
   setCtrl(false);
+  if (b.dataset.key === "Esc") {
+    // Esc detaches the PTY and returns to the line console (consistent with the
+    // keyboard Esc shortcut).
+    userExitPty(t.id);
+    return;
+  }
   if (b.dataset.ctrl) {
     // Explicit control combos (e.g. ^X to quit nano). Sending the control char
     // directly means normal typing is NEVER turned into a control sequence, so
