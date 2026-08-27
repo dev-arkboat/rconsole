@@ -147,6 +147,21 @@ html, body {
   width: 44px;
   cursor: pointer;
 }
+#themebtn {
+  background: transparent;
+  border: none;
+  border-left: 1px solid var(--border);
+  color: var(--dim);
+  font-family: inherit;
+  font-size: 12px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 0 14px;
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+}
+#themebtn:hover { color: var(--fg); }
 
 #screen {
   flex: 1;
@@ -168,7 +183,7 @@ html, body {
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 4px;
-  background: #000;
+  background: var(--bg);
   overflow: hidden;
 }
 #app.pty #screen { display: none; }
@@ -192,7 +207,7 @@ html, body {
   position: static;
   inset: auto;
   z-index: auto;
-  background: #000;
+  background: var(--bg);
 }
 #app.pty .term-host {
   display: block !important;
@@ -457,3 +472,108 @@ body.touch #editor-highlight,
 body.touch #editor-input,
 body.touch #editor-gutter { font-size: 16px; line-height: 1.6; }
 body.touch #editor-bar button { font-size: 15px; padding: 12px 16px; }
+
+/* ---------------------------------------------------------------------------
+   Themes: applied via <html data-theme="...">. Each theme overrides the core
+   color variables consumed above (--bg, --fg, --green, --panel, --border,
+   --dim, --amber, --red, --blue). The line console, tabs, editor and prompt all
+   derive their colors from these, so a single switch re-themes everything.
+   --------------------------------------------------------------------------- */
+[data-theme="light"] {
+  --bg: #ffffff; --fg: #1a1a1a; --green: #137333; --blue: #1a73e8;
+  --dim: #666666; --amber: #b8860b; --red: #c0392b; --panel: #f0f0f0; --border: #cccccc;
+}
+[data-theme="amber"] {
+  --bg: #1a1000; --fg: #ffb000; --green: #ffb000; --blue: #ffd27f;
+  --dim: #b8860b; --amber: #ffcb6b; --red: #ff6b6b; --panel: #241600; --border: #4a3000;
+}
+[data-theme="solarized"] {
+  --bg: #002b36; --fg: #839496; --green: #859900; --blue: #268bd2;
+  --dim: #586e75; --amber: #b58900; --red: #dc322f; --panel: #073642; --border: #0a4750;
+}
+[data-theme="dracula"] {
+  --bg: #282a36; --fg: #f8f8f2; --green: #50fa7b; --blue: #8be9fd;
+  --dim: #6272a4; --amber: #f1fa8c; --red: #ff5555; --panel: #21222c; --border: #44475a;
+}
+[data-theme="github"] {
+  --bg: #0d1117; --fg: #c9d1d9; --green: #3fb950; --blue: #58a6ff;
+  --dim: #8b949e; --amber: #d29922; --red: #f85149; --panel: #161b22; --border: #30363d;
+}
+[data-theme="ubuntu"] {
+  --bg: #300a24; --fg: #eeeeec; --green: #8ae234; --blue: #729fcf;
+  --dim: #c8c8c8; --amber: #ffcb6b; --red: #ff6b6b; --panel: #2a0a20; --border: #5a2050;
+}
+[data-theme="retro"] {
+  --bg: #000000; --fg: #33ff33; --green: #33ff33; --blue: #33ff33;
+  --dim: #1a9a1a; --amber: #33ff33; --red: #ff5555; --panel: #001100; --border: #0a330a;
+}
+[data-theme="nord"] {
+  --bg: #2e3440; --fg: #d8dee9; --green: #a3be8c; --blue: #81a1c1;
+  --dim: #4c566a; --amber: #ebcb8b; --red: #bf616a; --panel: #3b4252; --border: #434c5e;
+}
+[data-theme="gruvbox"] {
+  --bg: #282828; --fg: #ebdbb2; --green: #b8bb26; --blue: #83a598;
+  --dim: #a89984; --amber: #fabd2f; --red: #fb4934; --panel: #32302f; --border: #504945;
+}
+[data-theme="matrix"] {
+  --bg: #000800; --fg: #33ff33; --green: #33ff33; --blue: #33ff33;
+  --dim: #1a9a1a; --amber: #33ff33; --red: #ff5555; --panel: #001400; --border: #0a330a;
+}
+[data-theme="tokyonight"] {
+  --bg: #1a1b26; --fg: #c0caf5; --green: #9ece6a; --blue: #7aa2f7;
+  --dim: #565f89; --amber: #e0af68; --red: #f7768e; --panel: #16161e; --border: #2a2e3a;
+}
+[data-theme="catppuccin"] {
+  --bg: #1e1e2e; --fg: #cdd6f4; --green: #a6e3a1; --blue: #89b4fa;
+  --dim: #6c7086; --amber: #f9e2af; --red: #f38ba8; --panel: #181825; --border: #313244;
+}
+[data-theme="monokai"] {
+  --bg: #272822; --fg: #f8f8f2; --green: #a6e22e; --blue: #66d9ef;
+  --dim: #75715e; --amber: #e6db74; --red: #f92672; --panel: #1f201b; --border: #3e3d32;
+}
+[data-theme="everforest"] {
+  --bg: #2d353b; --fg: #d3c6aa; --green: #a7c080; --blue: #7fbbb3;
+  --dim: #859289; --amber: #d3b561; --red: #e67e80; --panel: #283339; --border: #3d484d;
+}
+[data-theme="ayu"] {
+  --bg: #0a0e14; --fg: #b3b1ad; --green: #cae56b; --blue: #73b9ed;
+  --dim: #5c6773; --amber: #ffb454; --red: #f07178; --panel: #0a0e14; --border: #1e2329;
+}
+[data-theme="papercolor"] {
+  --bg: #1c1c1c; --fg: #eeeeee; --green: #87af87; --blue: #87afff;
+  --dim: #8a8a8a; --amber: #d7af87; --red: #af8787; --panel: #232323; --border: #3a3a3a;
+}
+
+/* Custom error pages (404, 500, ...) — terminal-styled, reuse login shell. */
+.error-box { text-align: center; }
+.error-code {
+  font-size: 64px;
+  font-weight: bold;
+  color: var(--red);
+  margin: 0 0 4px;
+  line-height: 1;
+  text-shadow: 0 0 18px rgba(255, 107, 107, .35);
+}
+.error-title {
+  margin: 0 0 8px;
+  font-size: 18px;
+  color: var(--fg);
+  letter-spacing: 1px;
+}
+.error-msg {
+  color: var(--dim);
+  margin: 0 0 20px;
+  font-size: 13px;
+}
+.error-btn {
+  display: inline-block;
+  text-decoration: none;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--green);
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.error-btn:hover { border-color: var(--green); }

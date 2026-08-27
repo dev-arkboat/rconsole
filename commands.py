@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 import auth
+import jobs
 import state
 
 HERE = Path(__file__).resolve().parent
@@ -87,6 +88,22 @@ def cmd_help(ctx, args):
     for name, desc in std:
         out.append(f"  {name:<16} {desc}")
     out.append("")
+    out.append("Shell features:")
+    out.append("  alias name=cmd        define a persistent command alias")
+    out.append("  unalias <name>        remove an alias")
+    out.append("  theme [name]          list / switch console themes")
+    out.append("  <cmd> &               run a command in the background")
+    out.append("  jobs                  list background jobs")
+    out.append("  jobout %n [lines]     show a background job's output")
+    out.append("  jobtail %n            live-tail a job's output (any key to stop)")
+    out.append("  fg %n                 bring a job's output to the foreground")
+    out.append("  kill %n               kill a background job")
+    out.append("")
+    out.append("Fun commands:")
+    out.append("  cowsay <text>  fortune  figlet <text>  banner <text>")
+    out.append("  lolcat <text>   sl  matrix  neofetch  colors  cal  wc  rev")
+    out.append("  date  uptime  echo -e <text>  hi")
+    out.append("")
     out.append("Admin commands (need 'sudo'):")
     for name, desc in sudo:
         out.append(f"  {name:<28} {desc}")
@@ -132,6 +149,89 @@ def cmd_cd(ctx, args):
     if p.exists():
         return f"cd: {args[0]}: Not a directory"
     return f"cd: {args[0]}: No such file or directory"
+
+
+# ---------------------------------------------------------------------------
+# Aliases (per-user, persisted)
+# ---------------------------------------------------------------------------
+
+@command("alias")
+def cmd_alias(ctx, args):
+    """Define or list command aliases.
+
+    Usage:
+      alias                 -> list all aliases
+      alias name=command    -> define an alias (quotes optional)
+      alias name            -> show one alias
+    """
+    sid = ctx["sid"]
+    if not args:
+        a = state.get_aliases(sid)
+        if not a:
+            return "No aliases defined. Try: alias ll=ls -la"
+        out = ["Aliases:"]
+        for k in sorted(a):
+            out.append(f"  alias {k}='{a[k]}'")
+        return "\n".join(out)
+    arg = " ".join(args)
+    if "=" not in arg:
+        name = arg.strip()
+        a = state.get_aliases(sid).get(name)
+        if a is None:
+            return f"alias: {name}: not found"
+        return f"alias {name}='{a}'"
+    name, value = arg.split("=", 1)
+    name = name.strip()
+    value = value.strip().strip("'\"")
+    if not name or " " in name:
+        return "alias: invalid name (no spaces allowed)"
+    state.set_alias(sid, name, value)
+    return ""
+
+
+@command("unalias")
+def cmd_unalias(ctx, args):
+    if not args:
+        return "Usage: unalias <name>"
+    ok = state.remove_alias(ctx["sid"], args[0].strip())
+    if not ok:
+        return f"unalias: {args[0]}: not found"
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# Themes (per-user, persisted; applied live in the browser)
+# ---------------------------------------------------------------------------
+
+THEMES = ["default", "light", "amber", "solarized", "dracula", "github",
+          "ubuntu", "retro", "nord", "gruvbox", "matrix", "tokyonight",
+          "catppuccin", "monokai", "everforest", "ayu", "papercolor"]
+
+
+@command("theme")
+def cmd_theme(ctx, args):
+    """List or switch console themes.
+
+    Usage:
+      theme            -> list available themes + current
+      theme <name>     -> apply a theme (persisted for your account)
+    """
+    sid = ctx["sid"]
+    sess = state.get_session(sid)
+    current = sess.get("theme", "default") if sess else "default"
+    if not args:
+        out = ["Available themes (use: theme <name>):", ""]
+        for t in THEMES:
+            mark = " *" if t == current else ""
+            out.append(f"  {t:<12}{mark}")
+        out.append("")
+        out.append(f"Current theme: {current}")
+        return "\n".join(out)
+    name = args[0].strip().lower()
+    if name not in THEMES:
+        return f"theme: unknown theme '{name}'. Try: theme  (to list)"
+    state.set_theme(sid, name)
+    return {"output": f"Theme set to '{name}'.", "theme": name}
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +380,104 @@ def cmd_kprocess(ctx, args):
 
 
 # ---------------------------------------------------------------------------
+# Background jobs:  cmd &   -> start detached;  jobs / jobout / kill %n
+# ---------------------------------------------------------------------------
+
+@command("jobs")
+def cmd_jobs(ctx, args):
+    """List background jobs started with '&'."""
+    sid = ctx["sid"]
+    listing = jobs.list_jobs(sid)
+    if not listing:
+        return "No background jobs running. Start one with:  sleep 30 &"
+    out = ["Job   PID    STATE      COMMAND", "-" * 50]
+    for jid, job in listing:
+        state_ = "running" if job.alive else "done"
+        pid = str(job.pid) if job.pid else "-"
+        out.append(f"  {jid:<3}  {pid:<6} {state_:<10} {job.cmd[:40]}")
+    out.append("")
+    out.append("Inspect output:  jobout %n   |   Live:  jobtail %n / fg %n   |   Kill:  kill %n")
+    return "\n".join(out)
+
+
+@command("jobout")
+def cmd_jobout(ctx, args):
+    """Show the last lines of a background job's output: jobout %n [lines]."""
+    if not args:
+        return "Usage: jobout %n [lines]"
+    jid = jobs.parse_job_ref(args[0])
+    if jid is None:
+        return f"jobout: invalid job: {args[0]}"
+    job = jobs.get_job(ctx["sid"], jid)
+    if not job:
+        return f"jobout: no such job: {jid}"
+    n = 50
+    if len(args) > 1:
+        try:
+            n = int(args[1])
+        except ValueError:
+            return "jobout: lines must be an integer"
+    head = f"--- job {jid} ({'running' if job.alive else 'done'}) ---"
+    return head + "\n" + job.tail(n)
+
+
+@command("jobtail")
+def cmd_jobtail(ctx, args):
+    """Live-tail a background job's output: jobtail %n (press any key to stop)."""
+    if not args:
+        return "Usage: jobtail %n   (live tail; press any key to stop)"
+    jid = jobs.parse_job_ref(args[0])
+    if jid is None:
+        return f"jobtail: invalid job: {args[0]}"
+    job = jobs.get_job(ctx["sid"], jid)
+    if not job:
+        return f"jobtail: no such job: {jid}"
+    return {"jobtail": jid}
+
+
+@command("fg")
+def cmd_fg(ctx, args):
+    """Bring a background job's output to the foreground: fg %n.
+
+    Streams the job's output live and stops automatically when the job ends.
+    """
+    if not args:
+        return "Usage: fg %n   (foreground a job; stops when it ends)"
+    jid = jobs.parse_job_ref(args[0])
+    if jid is None:
+        return f"fg: invalid job: {args[0]}"
+    job = jobs.get_job(ctx["sid"], jid)
+    if not job:
+        return f"fg: no such job: {jid}"
+    return {"jobtail": jid, "fg": True}
+
+
+@command("kill")
+def cmd_kill(ctx, args):
+    """Kill processes.
+
+    Usage:
+      kill %n          -> kill background job n (see: jobs)
+      kill <pid> ...   -> delegate to the real host kill
+      kill <signal> %n -> send a signal name to job n (e.g. kill SIGKILL %1)
+    """
+    import interp as _interp
+    if not args:
+        return "Usage: kill %n | kill <pid>..."
+    # Job reference '%n' anywhere -> kill that job.
+    for a in args:
+        if a.startswith("%"):
+            jid = jobs.parse_job_ref(a)
+            if jid is None:
+                return f"kill: invalid job: {a}"
+            if jobs.kill_job(ctx["sid"], jid):
+                return f"Background job {jid} terminated."
+            return f"kill: no such job: {jid}"
+    # Otherwise delegate to the real host kill (e.g. kill -9 1234).
+    return _interp._passthrough(ctx, "kill " + " ".join(args))
+
+
+# ---------------------------------------------------------------------------
 # Protected / admin commands
 # ---------------------------------------------------------------------------
 
@@ -350,6 +548,10 @@ def cmd_rboot(ctx, args):
 
     username = ctx["username"]
     state.kill_all_hosts(username)
+    try:
+        jobs.kill_all_jobs(username)
+    except Exception:
+        pass
     try:
         import termsess as _ts
         with _ts.SESSIONS_LOCK:
@@ -844,4 +1046,7 @@ def cmd_fm(ctx, args):
     """
     start = _raw_arg(ctx) or (args[0] if args else ctx["tab"]["cwd"])
     return fm_routine(start, ctx)
-    return routine()
+
+
+# Register the fun/novelty commands (cowsay, fortune, figlet, ...).
+import fun  # noqa: E402,F401

@@ -8,12 +8,14 @@ import uuid
 from datetime import timedelta
 
 import requests
-from flask import (Flask, Response, abort, redirect, render_template,
+from flask import (Flask, Response, abort, jsonify, redirect, render_template,
                    request, session, url_for)
 from flask_sock import Sock
+from werkzeug.exceptions import HTTPException
 
 import auth
 import interp
+import jobs
 import ptyhost
 import state
 import termsess
@@ -157,7 +159,17 @@ def login():
 def console_page():
     if "username" not in session:
         return redirect(url_for("login"))
-    return render_template("console.html", username=session["username"])
+    sess = state.get_session(session["username"])
+    theme = sess.get("theme", "github") if sess else "github"
+    # Cache-bust static assets so the browser always picks up new JS/CSS.
+    js_path = os.path.join(os.path.dirname(__file__), "static", "console.js")
+    try:
+        cache_v = int(os.path.getmtime(js_path))
+    except OSError:
+        cache_v = 1
+    return render_template(
+        "console.html", username=session["username"], theme=theme, cache_v=cache_v
+    )
 
 
 @app.route("/api/run", methods=["POST"])
@@ -268,6 +280,29 @@ app.add_url_rule("/<folder>/<int:port>/<path:rest>", "proxy_rest", _do_proxy,
 
 
 # ---------------------------------------------------------------------------
+# Live job tail: incremental output feed for `jobtail` / `fg`.
+# ---------------------------------------------------------------------------
+@app.route("/api/jobtail")
+def api_jobtail():
+    if "username" not in session:
+        return {"error": "unauthorized"}, 401
+    sid = session["username"]
+    try:
+        jid = int(request.args.get("job"))
+    except (TypeError, ValueError):
+        return {"error": "bad job id"}, 400
+    try:
+        off = int(request.args.get("off", 0) or 0)
+    except (TypeError, ValueError):
+        off = 0
+    job = jobs.get_job(sid, jid)
+    if not job:
+        return {"error": "no such job"}, 404
+    text, new_off = job.read_from(off)
+    return {"text": text, "off": new_off, "alive": job.alive}
+
+
+# ---------------------------------------------------------------------------
 # Interactive terminal: stream a real PTY over a websocket.
 # ---------------------------------------------------------------------------
 @app.route("/api/tabs")
@@ -372,6 +407,71 @@ def ws_terminal(ws):
     cols = int(request.args.get("cols", 80))
     rows = int(request.args.get("rows", 24))
     ptyhost.attach(ws, username, tab_id, cmd, tab["cwd"], cols, rows)
+
+
+# ---------------------------------------------------------------------------
+# Custom error pages. API routes (/api/*, JSON Accept) get a JSON error so the
+# client keeps working; everything else gets a themed HTML page.
+# ---------------------------------------------------------------------------
+ERROR_INFO = {
+    400: ("Bad Request", "The server couldn't understand that request."),
+    401: ("Unauthorized", "You need to log in to access this."),
+    403: ("Forbidden", "You don't have permission to do that."),
+    404: ("Not Found", "This page wandered off into the void."),
+    405: ("Method Not Allowed", "That request method isn't supported here."),
+    408: ("Request Timeout", "The server timed out waiting for you."),
+    413: ("Payload Too Large", "That upload is too big."),
+    429: ("Too Many Requests", "Slow down — you're sending requests too fast."),
+    500: ("Internal Server Error", "Something broke on our end."),
+    502: ("Bad Gateway", "An upstream service misbehaved."),
+    503: ("Service Unavailable", "The server is temporarily overloaded or down."),
+    504: ("Gateway Timeout", "An upstream service timed out."),
+}
+
+
+def _is_api_request():
+    if request.path.startswith("/api/"):
+        return True
+    return request.accept_mimetypes.best_match(
+        ["application/json", "text/html"]
+    ) == "application/json"
+
+
+def _static_version():
+    p = os.path.join(os.path.dirname(__file__), "static", "style.css")
+    try:
+        return int(os.path.getmtime(p))
+    except OSError:
+        return 1
+
+
+@app.errorhandler(HTTPException)
+def handle_http_error(e):
+    code = e.code or 500
+    title, default_msg = ERROR_INFO.get(code, ("Error", str(e)))
+    message = e.description or default_msg
+    if _is_api_request():
+        return jsonify(error=message, code=code), code
+    return render_template(
+        "error.html", code=code, title=title, message=message,
+        cache_v=_static_version(),
+    ), code
+
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    if isinstance(e, HTTPException):
+        return handle_http_error(e)
+    app.logger.exception("Unhandled exception: %s", e)
+    if _is_api_request():
+        return jsonify(error="internal server error", code=500), 500
+    return render_template(
+        "error.html",
+        code=500,
+        title="Internal Server Error",
+        message="Something broke on our end. Check the server logs.",
+        cache_v=_static_version(),
+    ), 500
 
 
 # Seed the default user at import time so login works regardless of how the app

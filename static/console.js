@@ -30,11 +30,197 @@ function ensureXterm() {
   return xtermLoad;
 }
 
+// ---------------------------------------------------------------------------
+// ANSI escape code -> HTML so colored host output and the fun commands
+// (cowsay/matrix/lolcat/neofetch/...) render in full color in the line console.
+// ---------------------------------------------------------------------------
+const ANSI_COLORS = [
+  "#000000", "#cd3131", "#0dbc79", "#e5e510", "#2472c8", "#bc3fbc", "#11a8cd", "#e5e5e5",
+  "#666666", "#f14c4c", "#23d18b", "#f5f543", "#3b8eea", "#d670d6", "#29b8db", "#ffffff",
+];
+function ansi256(n) {
+  if (n < 16) return ANSI_COLORS[n];
+  if (n >= 232) { const v = 8 + (n - 232) * 10; return `rgb(${v},${v},${v})`; }
+  const c = n - 16, r = Math.floor(c / 36) % 6, g = Math.floor(c / 6) % 6, b = c % 6;
+  const v = (x) => (x === 0 ? 0 : x === 5 ? 255 : 55 + x * 40);
+  return `rgb(${v(r)},${v(g)},${v(b)})`;
+}
+function ansiToHtml(s) {
+  const re = /\x1b\[([0-9;]*)m/g;
+  let out = "", last = 0, m;
+  const st = { fg: null, bg: null, bold: false, dim: false, italic: false,
+               under: false, strike: false, inv: false };
+  function span(text) {
+    const e = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    if (!text) return "";
+    let fgc = st.fg, bgc = st.bg;
+    if (st.inv) { const t = fgc; fgc = bgc || "#000000"; bgc = t || "#cccccc"; }
+    let css = "";
+    if (fgc) css += "color:" + fgc + ";";
+    if (bgc) css += "background:" + bgc + ";";
+    if (st.bold) css += "font-weight:bold;";
+    if (st.dim) css += "opacity:.7;";
+    if (st.italic) css += "font-style:italic;";
+    if (st.under || st.strike)
+      css += "text-decoration:" + (st.under ? "underline" : "") +
+             (st.strike ? " line-through" : "") + ";";
+    return css ? `<span style="${css}">${e}</span>` : e;
+  }
+  function apply(codes) {
+    const parts = (codes === "" ? "0" : codes).split(";")
+      .map((x) => (x === "" ? 0 : parseInt(x, 10)));
+    let i = 0;
+    while (i < parts.length) {
+      const c = parts[i];
+      if (c === 0) Object.assign(st, { fg: null, bg: null, bold: false, dim: false,
+        italic: false, under: false, strike: false, inv: false });
+      else if (c === 1) st.bold = true;
+      else if (c === 2) st.dim = true;
+      else if (c === 3) st.italic = true;
+      else if (c === 4) st.under = true;
+      else if (c === 7) st.inv = true;
+      else if (c === 9) st.strike = true;
+      else if (c === 22) { st.bold = false; st.dim = false; }
+      else if (c === 23) st.italic = false;
+      else if (c === 24) st.under = false;
+      else if (c === 27) st.inv = false;
+      else if (c === 29) st.strike = false;
+      else if (c >= 30 && c <= 37) st.fg = ANSI_COLORS[c - 30];
+      else if (c === 38) {
+        if (parts[i + 1] === 2) { st.fg = `rgb(${parts[i + 2]},${parts[i + 3]},${parts[i + 4]})`; i += 4; }
+        else if (parts[i + 1] === 5) { st.fg = ansi256(parts[i + 2]); i += 2; }
+      }
+      else if (c === 39) st.fg = null;
+      else if (c >= 90 && c <= 97) st.fg = ANSI_COLORS[c - 90 + 8];
+      else if (c >= 40 && c <= 47) st.bg = ANSI_COLORS[c - 40];
+      else if (c === 48) {
+        if (parts[i + 1] === 2) { st.bg = `rgb(${parts[i + 2]},${parts[i + 3]},${parts[i + 4]})`; i += 4; }
+        else if (parts[i + 1] === 5) { st.bg = ansi256(parts[i + 2]); i += 2; }
+      }
+      else if (c === 49) st.bg = null;
+      else if (c >= 100 && c <= 107) st.bg = ANSI_COLORS[c - 100 + 8];
+      i++;
+    }
+  }
+  while ((m = re.exec(s))) {
+    if (m.index > last) out += span(s.slice(last, m.index));
+    apply(m[1]);
+    last = re.lastIndex;
+  }
+  if (last < s.length) out += span(s.slice(last));
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Themes: applied via <html data-theme="...">; xterm gets a matching palette.
+// ---------------------------------------------------------------------------
+const THEME_XTERM = {
+  default:  { background: "#000000", foreground: "#d6e2ef", cursor: "#d6e2ef" },
+  light:    { background: "#ffffff", foreground: "#1a1a1a", cursor: "#1a1a1a" },
+  amber:    { background: "#1a1000", foreground: "#ffb000", cursor: "#ffb000" },
+  solarized:{ background: "#002b36", foreground: "#839496", cursor: "#839496" },
+  dracula:  { background: "#282a36", foreground: "#f8f8f2", cursor: "#f8f8f2" },
+  github:   { background: "#0d1117", foreground: "#c9d1d9", cursor: "#c9d1d9" },
+  ubuntu:   { background: "#300a24", foreground: "#eeeeec", cursor: "#eeeeec" },
+  retro:    { background: "#000000", foreground: "#33ff33", cursor: "#33ff33" },
+  nord:     { background: "#2e3440", foreground: "#d8dee9", cursor: "#d8dee9" },
+  gruvbox:  { background: "#282828", foreground: "#ebdbb2", cursor: "#ebdbb2" },
+  matrix:   { background: "#000800", foreground: "#33ff33", cursor: "#33ff33" },
+  tokyonight:{ background: "#1a1b26", foreground: "#c0caf5", cursor: "#c0caf5" },
+  catppuccin:{ background: "#1e1e2e", foreground: "#cdd6f4", cursor: "#cdd6f4" },
+  monokai:  { background: "#272822", foreground: "#f8f8f2", cursor: "#f8f8f2" },
+  everforest:{ background: "#2d353b", foreground: "#d3c6aa", cursor: "#d3c6aa" },
+  ayu:      { background: "#0a0e14", foreground: "#b3b1ad", cursor: "#b3b1ad" },
+  papercolor:{ background: "#1c1c1c", foreground: "#eeeeee", cursor: "#eeeeee" },
+};
+let currentTheme = window.RCONSOLE_THEME || "github";
+function applyTheme(name) {
+  currentTheme = name || "github";
+  document.documentElement.dataset.theme = currentTheme;
+  const tb = document.getElementById("themebtn");
+  if (tb) tb.textContent = currentTheme;
+  const t = activeTab();
+  if (t && t.term) {
+    try { t.term.options.theme = THEME_XTERM[currentTheme] || THEME_XTERM.default; } catch (e) { /* ignore */ }
+  }
+}
+
+// Theme order for the toggle button (keep in sync with commands.THEMES).
+const THEME_LIST = ["default", "light", "amber", "solarized", "dracula", "github",
+  "ubuntu", "retro", "nord", "gruvbox", "matrix", "tokyonight", "catppuccin",
+  "monokai", "everforest", "ayu", "papercolor"];
+
+function cycleTheme() {
+  const i = THEME_LIST.indexOf(currentTheme);
+  const next = THEME_LIST[(i + 1) % THEME_LIST.length];
+  applyTheme(next);
+  // Persist the choice to the server (keyed to the account).
+  fetch("/api/run", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cmd: "theme " + next, tab: activeId || "main" }),
+  }).catch(() => {});
+}
+
 const elTabs = document.getElementById("tabs");
 const elNew = document.getElementById("newtab");
 const elOutput = document.getElementById("output");
 const elPrompt = document.getElementById("prompt");
 const elCmd = document.getElementById("cmd");
+
+let jobTail = null;
+function onTailKey(e) {
+  if (jobTail && jobTail.active) {
+    e.preventDefault();
+    stopJobTail();
+  }
+}
+function stopJobTail() {
+  if (!jobTail) return;
+  jobTail.active = false;
+  if (jobTail.timer) clearInterval(jobTail.timer);
+  document.removeEventListener("keydown", onTailKey, true);
+  jobTail = null;
+  elCmd.disabled = false;
+  elCmd.focus();
+  renderOutput();
+}
+function startJobTail(jid, isFg) {
+  stopJobTail();
+  jobTail = { jid, off: 0, active: true, timer: null, fg: !!isFg };
+  appendLines(
+    "[tailing job " + jid + (isFg ? " (foreground)" : "") + " — press any key to stop]",
+    "term-dim"
+  );
+  renderOutput();
+  elCmd.disabled = true;
+  document.addEventListener("keydown", onTailKey, true);
+  const tick = () => {
+    if (!jobTail || !jobTail.active) return;
+    fetch("/api/jobtail?job=" + encodeURIComponent(jid) + "&off=" + encodeURIComponent(jobTail.off))
+      .then((r) => r.json())
+      .then((j) => {
+        if (!jobTail || !jobTail.active) return;
+        if (j.text) {
+          String(j.text).split("\n").forEach((l) => {
+            const line = l === "" ? " " : l;
+            const t = activeTab();
+            t.lines.push({ text: line, html: ansiToHtml(line), cls: "" });
+          });
+          renderOutput();
+        }
+        if (typeof j.off === "number") jobTail.off = j.off;
+        if (!j.alive) {
+          appendLines("[job " + jid + " finished]", "term-dim");
+          renderOutput();
+          stopJobTail();
+        }
+      })
+      .catch(() => {});
+  };
+  jobTail.timer = setInterval(tick, 800);
+  tick();
+}
 
 function promptText(cwd) {
   return `${USER}@rconsole:${cwd}$ `;
@@ -128,6 +314,7 @@ function renderTabs() {
 }
 
 function closeTab(id) {
+  stopJobTail();
   const idx = tabs.findIndex((t) => t.id === id);
   if (idx === -1) return;
   const t = tabs[idx];
@@ -157,6 +344,7 @@ function closeTab(id) {
 }
 
 function selectTab(id) {
+  stopJobTail();
   const prev = activeTab();
   if (prev && elCmd) prev.draft = elCmd.value;
   activeId = id;
@@ -176,7 +364,8 @@ function selectTab(id) {
 function appendLineEl(ln) {
   const div = document.createElement("div");
   div.className = "line" + (ln.cls ? " " + ln.cls : "");
-  div.textContent = ln.text;
+  if (ln.html !== undefined) div.innerHTML = ln.html;
+  else div.textContent = ln.text;
   elOutput.appendChild(div);
 }
 
@@ -217,7 +406,8 @@ function appendLines(text, cls) {
   if (text === undefined || text === null) return;
   const t = activeTab();
   String(text).split("\n").forEach((l) => {
-    t.lines.push({ text: l === "" ? " " : l, cls: cls || "" });
+    const line = l === "" ? " " : l;
+    t.lines.push({ text: line, html: ansiToHtml(line), cls: cls || "" });
   });
   // Bound the scrollback so very long sessions don't grow the DOM/memory
   // without limit (which would eventually make every render janky). Trim
@@ -256,6 +446,13 @@ async function send(cmd) {
     openCodeEditor(data.editor);
     return;
   }
+
+  if (data.jobtail !== undefined && data.jobtail !== null) {
+    startJobTail(data.jobtail, !!data.fg);
+    return;
+  }
+
+  if (data.theme) applyTheme(data.theme);
 
   if (data.clear) t.lines = [];
 
@@ -338,7 +535,7 @@ async function openPty(cmd, tabId) {
     rendererType: "canvas",
     fontSize: 14,
     fontFamily: "Consolas, 'Courier New', monospace",
-    theme: { background: "#000000", foreground: "#d6e2ef" },
+    theme: THEME_XTERM[currentTheme] || THEME_XTERM.default,
   });
   t.fitAddon = new FitAddon.FitAddon();
   t.term.loadAddon(t.fitAddon);
@@ -626,6 +823,8 @@ elCmd.addEventListener("keydown", (e) => {
 });
 
 elNew.onclick = () => newTab();
+const elTheme = document.getElementById("themebtn");
+if (elTheme) elTheme.onclick = cycleTheme;
 document.getElementById("screen").addEventListener("click", () => elCmd.focus());
 
 // ---------------------------------------------------------------------------
@@ -1112,3 +1311,4 @@ async function init() {
 }
 
 init();
+applyTheme(currentTheme);

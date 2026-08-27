@@ -11,6 +11,8 @@ import sys
 from pathlib import Path
 
 import commands
+import jobs
+import state
 
 PASS_THROUGH_TIMEOUT = 60
 
@@ -50,6 +52,20 @@ def tokenize(line):
         return shlex.split(line)
     except ValueError:
         return line.split()
+
+
+def _expand_alias(tokens, aliases):
+    """Replace the first token with its alias value (single pass)."""
+    if not tokens or not aliases:
+        return tokens
+    name = tokens[0]
+    if name in aliases:
+        try:
+            repl = shlex.split(aliases[name])
+        except ValueError:
+            repl = aliases[name].split()
+        return repl + tokens[1:]
+    return tokens
 
 
 def _detect_shell():
@@ -140,6 +156,19 @@ def process(tab, username, is_admin, sid, raw):
         if not tokens:
             return {"output": "usage: sudo <command>"}
 
+    # Background job? A trailing '&' detaches the command from the console.
+    bg = False
+    if tokens and tokens[-1] == "&":
+        bg = True
+        tokens = tokens[:-1]
+        if not tokens:
+            return {"output": "syntax error near unexpected token `&'"}
+
+    # Expand a user alias on the (post-sudo) command.
+    aliases = state.get_aliases(sid)
+    tokens = _expand_alias(tokens, aliases)
+    host_cmd = " ".join(tokens)
+
     name = tokens[0]
     args = tokens[1:]
 
@@ -174,6 +203,11 @@ def process(tab, username, is_admin, sid, raw):
         return _normalize(result)
 
     # Everything else -> run on the real host shell.
+    if bg:
+        # A trailing '&' always wins: even an interactive program (python,
+        # vim, ...) should be detached rather than opened in a PTY.
+        jid, _ = jobs.start_job(sid, host_cmd, ctx["tab"]["cwd"])
+        return {"output": f"[job {jid}] {host_cmd} &   (jobs: list | jobout %{jid}: output | kill %{jid}: stop)"}
     if _is_interactive(tokens):
         # Hand off to a real PTY so interactive programs work.
         return {"pty": True, "cmd": host_cmd}

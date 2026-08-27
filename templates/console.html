@@ -4,14 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>rconsole — {{ username }}@rconsole</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='xterm.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v=cache_v) }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='xterm.css', v=cache_v) }}">
 </head>
 <body>
   <div id="app">
     <div id="tabbar">
       <div id="tabs"></div>
       <button id="newtab" title="new tab">+</button>
+      <button id="themebtn" type="button" title="Cycle console theme">theme</button>
     </div>
     <div id="screen">
       <div id="output"></div>
@@ -64,7 +65,7 @@
       </div>
     </div>
   </div>
-  <script>window.RCONSOLE_USER = "{{ username }}";</script>
-  <script src="{{ url_for('static', filename='console.js') }}" defer></script>
+  <script>window.RCONSOLE_USER = "{{ username }}";window.RCONSOLE_THEME = "{{ theme }}";</script>
+  <script src="{{ url_for('static', filename='console.js', v=cache_v) }}" defer></script>
 </body>
 </html>

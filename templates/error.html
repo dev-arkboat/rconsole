@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="github">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>rconsole — {{ code }} {{ title }}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v=cache_v) }}">
+</head>
+<body class="login-body">
+  <div class="login-box error-box">
+    <pre class="error-code">{{ code }}</pre>
+    <h1 class="error-title">{{ title }}</h1>
+    <p class="error-msg">{{ message }}</p>
+    <a class="error-btn" href="{{ url_for('login') if code == 401 else url_for('console_page') }}">
+      {% if code == 401 %}Go to login{% else %}Back to console{% endif %}
+    </a>
+  </div>
+</body>
+</html>

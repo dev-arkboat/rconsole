@@ -16,7 +16,7 @@ HERE = Path(__file__).resolve().parent
 DATA = HERE / "data"
 STATE_DIR = DATA / "state"
 
-STATE = {}  # username -> {"tabs": {...}, "hosts": {...}}
+STATE = {}  # username -> {"tabs": {...}, "hosts": {...}, "aliases": {...}, "theme": str}
 STATE_LOCK = threading.Lock()
 
 # Persistence is debounced: per-command writes (history/cwd) only mark a user
@@ -46,7 +46,9 @@ def _write(username):
     try:
         with open(_state_path(username), "w", encoding="utf-8") as f:
             json.dump({
-                "tabs": {tid: _tab_persist(t) for tid, t in sess["tabs"].items()}
+                "tabs": {tid: _tab_persist(t) for tid, t in sess["tabs"].items()},
+                "aliases": sess.get("aliases", {}),
+                "theme": sess.get("theme", "default"),
             }, f)
     except Exception:
         pass
@@ -130,7 +132,12 @@ def _load(username):
             "gen": t.get("gen"),
             "prompt": t.get("prompt"),
         }
-    return {"tabs": tabs, "hosts": {}}
+    return {
+        "tabs": tabs,
+        "hosts": {},
+        "aliases": data.get("aliases", {}) or {},
+        "theme": data.get("theme", "github") or "github",
+    }
 
 
 # ------------------------------------------------------------------------- session
@@ -138,11 +145,46 @@ def get_session(username):
     return STATE.get(username)
 
 
+def get_aliases(username):
+    sess = STATE.get(username)
+    return (sess or {}).get("aliases", {}) if sess else {}
+
+
+def set_alias(username, name, value):
+    sess = STATE.get(username)
+    if not sess:
+        sess = new_session(username)
+    sess.setdefault("aliases", {})[name] = value
+    save_now(username)
+
+
+def remove_alias(username, name):
+    sess = STATE.get(username)
+    if not sess:
+        return False
+    a = sess.setdefault("aliases", {})
+    if name in a:
+        del a[name]
+        save_now(username)
+        return True
+    return False
+
+
+def set_theme(username, theme):
+    sess = STATE.get(username)
+    if not sess:
+        sess = new_session(username)
+    sess["theme"] = theme
+    save_now(username)
+
+
 def new_session(username):
     with STATE_LOCK:
         if username in STATE:
             return STATE[username]
-        sess = _load(username) or {"tabs": {}, "hosts": {}}
+        sess = _load(username) or {"tabs": {}, "hosts": {}, "aliases": {}, "theme": "github"}
+        sess.setdefault("aliases", {})
+        sess.setdefault("theme", "default")
         STATE[username] = sess
         return sess
 
