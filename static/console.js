@@ -343,6 +343,35 @@ function closeTab(id) {
   selectTab(activeId);
 }
 
+function openAgentPicker(p) {
+  const modal = document.getElementById("agentModal");
+  const sel = document.getElementById("agentModalSelect");
+  const title = document.getElementById("agentModalTitle");
+  if (title) title.textContent = p.action === "model" ? "Choose a model" : "Choose";
+  sel.innerHTML = "";
+  (p.models || []).forEach((m) => {
+    const o = document.createElement("option");
+    o.value = m;
+    o.textContent = m;
+    if (m === p.current) o.selected = true;
+    sel.appendChild(o);
+  });
+  modal.classList.remove("hidden");
+  elCmd.disabled = true;
+  const selectBtn = document.getElementById("agentModalSelectBtn");
+  const cancelBtn = document.getElementById("agentModalCancelBtn");
+  selectBtn.onclick = () => {
+    const v = sel.value;
+    modal.classList.add("hidden");
+    send("/model " + v);
+  };
+  cancelBtn.onclick = () => {
+    modal.classList.add("hidden");
+    // Resume the agent session to a normal prompt without changing the model.
+    send("");
+  };
+}
+
 function selectTab(id) {
   stopJobTail();
   const prev = activeTab();
@@ -363,10 +392,98 @@ function selectTab(id) {
 
 function appendLineEl(ln) {
   const div = document.createElement("div");
+  if (ln.el) {
+    div.className = "line codebox-line";
+    div.appendChild(ln.el);
+    elOutput.appendChild(div);
+    return;
+  }
   div.className = "line" + (ln.cls ? " " + ln.cls : "");
   if (ln.html !== undefined) div.innerHTML = ln.html;
   else div.textContent = ln.text;
   elOutput.appendChild(div);
+}
+
+// Render agent output with support for fenced code blocks (```lang ... ```):
+// normal text is appended line-by-line (ANSI aware); a fenced block becomes a
+// styled, syntax-highlighted "code box" element, so file edits/read shown by
+// the agent look like a little editor panel rather than raw text.
+function appendCodeBox(lang, code) {
+  const t = activeTab();
+  // Shell/command output can carry ANSI color codes; strip them so they don't
+  // render as literal escape sequences inside the box.
+  code = stripAnsi(code);
+  const box = document.createElement("div");
+  box.className = "agent-code";
+  const head = document.createElement("div");
+  head.className = "agent-code-head";
+  const title = document.createElement("span");
+  title.className = "agent-code-title";
+  title.textContent = lang === "log" ? "bash" : (lang ? lang : "code");
+  head.appendChild(title);
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = "agent-code-copy";
+  copy.textContent = "copy";
+  copy.onclick = () => {
+    try {
+      navigator.clipboard.writeText(code);
+      copy.textContent = "copied";
+      setTimeout(() => (copy.textContent = "copy"), 1200);
+    } catch (e) { /* clipboard blocked */ }
+  };
+  head.appendChild(copy);
+  const pre = document.createElement("pre");
+  pre.className = "agent-code-pre";
+  const hl = getHighlighter(lang || "text");
+  if (hl && code.length <= 300000) pre.innerHTML = hl(code) + "\n";
+  else pre.textContent = code;
+  box.appendChild(head);
+  box.appendChild(pre);
+  t.lines.push({ el: box });
+}
+
+function appendRich(text, cls) {
+  if (text === undefined || text === null) return;
+  const lines = String(text).split("\n");
+  let buf = [];
+  let inFence = false;
+  let fenceLang = "";
+  let fenceBuf = [];
+  const flush = () => {
+    if (buf.length) {
+      appendLines(buf.join("\n"), cls || "");
+      buf = [];
+    }
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const open = /^```([a-zA-Z0-9_+-]*)\s*$/.exec(line);
+    if (!inFence) {
+      if (open) {
+        flush();
+        inFence = true;
+        fenceLang = (open[1] || "").toLowerCase();
+        fenceBuf = [];
+      } else {
+        buf.push(line);
+      }
+    } else {
+      if (/^```\s*$/.test(line)) {
+        appendCodeBox(fenceLang, fenceBuf.join("\n"));
+        inFence = false;
+        fenceBuf = [];
+      } else {
+        fenceBuf.push(line);
+      }
+    }
+  }
+  if (inFence) {
+    // Unterminated fence: emit as plain text rather than swallow content.
+    buf.push("```" + fenceLang);
+    buf = buf.concat(fenceBuf);
+  }
+  flush();
 }
 
 function renderOutput() {
@@ -442,6 +559,27 @@ async function send(cmd) {
     return;
   }
 
+  // Intermediate "tick" from a streaming generator (e.g. the AI agent's
+  // "thinking…" / tool activity). Render it and keep advancing the generator
+  // automatically — do NOT show an input box, so the turn feels live instead of
+  // going silent until the final answer.
+  if (data._tick) {
+    if (data.output) appendRich(data.output, "");
+    renderOutput();
+    elCmd.disabled = true;
+    send("");
+    return;
+  }
+  elCmd.disabled = false;
+
+  // The agent asked the client to show a picker (e.g. /model with no argument).
+  if (data.agent_picker) {
+    if (data.output) appendRich(data.output, "");
+    renderOutput();
+    openAgentPicker(data.agent_picker);
+    return;
+  }
+
   if (data.editor) {
     openCodeEditor(data.editor);
     return;
@@ -464,7 +602,7 @@ async function send(cmd) {
   }
 
   if (data.output !== undefined && data.output !== "") {
-    appendLines(data.output, "");
+    appendRich(data.output, "");
   }
   if (data.prompt !== undefined) {
     t.interactive = true;

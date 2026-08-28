@@ -36,6 +36,15 @@ def _build_env(sid=None):
     env.setdefault("LC_ALL", "C.UTF-8")
     env.setdefault("CLICOLOR", "1")
     env.setdefault("FORCE_COLOR", "1")
+    # Some TUIs (opencode among them) spawn a sub-shell or read $SHELL; the server
+    # often has no SHELL set, which can make them bail out. Default to a real one.
+    if not env.get("SHELL"):
+        for _c in ("/bin/bash", "/usr/bin/bash", "/bin/sh", "/usr/bin/sh"):
+            if os.path.exists(_c):
+                env["SHELL"] = _c
+                break
+        else:
+            env.setdefault("SHELL", "/bin/sh")
     # Per-user custom environment (e.g. API keys set via `sudo env`) is exported
     # into every session so tools like opencode pick the keys up automatically.
     if sid:
@@ -115,7 +124,11 @@ class TermSession:
         argv = [shell_exe, flag, self.cmd] if self.cmd else [shell_exe]
         master_fd, slave_fd = pty_mod.openpty()
         try:
-            winsize = struct.pack("HHHH", self.rows, self.cols, 0, 0)
+            cols = max(1, int(self.cols)); rows = max(1, int(self.rows))
+        except Exception:
+            cols, rows = 80, 24
+        try:
+            winsize = struct.pack("HHHH", rows, cols, 0, 0)
             fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
         except Exception:
             pass
@@ -180,19 +193,35 @@ class TermSession:
 
     # --------------------------------------------------------------- watchdog
     def _watchdog(self):
+        rc = None
         if sys.platform == "win32":
             while not self.stop.is_set() and self.pty.isalive():
                 time.sleep(0.2)
         else:
             try:
                 self.proc.wait()
+                rc = self.proc.returncode
             except Exception:
                 pass
         self.stop.set()
         self.alive = False
         self.exited = True
         try:
-            self._append("\r\n*** terminal session ended ***\r\n")
+            self._append(
+                "\r\n*** terminal session ended%s ***\r\n"
+                % ((" (exit code %s)" % rc) if rc is not None else "")
+            )
+        except Exception:
+            pass
+        # Surface the tail of output server-side so the failure isn't invisible:
+        # check the host/container logs (e.g. `render logs`) to see what the
+        # command actually printed before it died or hung.
+        try:
+            tail = self.buffer[-2000:]
+            sys.stderr.write(
+                "[termsess] session (%s/%s) ended rc=%s tail=%r\n"
+                % (self.sid, self.tab_id, rc, tail)
+            )
         except Exception:
             pass
         # Tell the client the process has exited so it can automatically return

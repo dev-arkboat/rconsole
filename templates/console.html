@@ -64,6 +64,16 @@
         </div>
       </div>
     </div>
+    <div id="agentModal" class="modal hidden">
+      <div class="modal-box">
+        <div id="agentModalTitle" class="modal-title">Choose a model</div>
+        <select id="agentModalSelect" class="modal-select"></select>
+        <div class="modal-actions">
+          <button id="agentModalSelectBtn" type="button" class="btn">Select</button>
+          <button id="agentModalCancelBtn" type="button" class="btn btn-ghost">Cancel</button>
+        </div>
+      </div>
+    </div>
   </div>
   <script>window.RCONSOLE_USER = "{{ username }}";window.RCONSOLE_THEME = "{{ theme }}";</script>
   <script src="{{ url_for('static', filename='console.js', v=cache_v) }}" defer></script>

@@ -192,6 +192,72 @@ No raw ports need to be exposed to the internet.
 
 ---
 
+## AI agent (`sudo agent`) — in-console, no PTY
+
+rconsole ships a **native, line-mode AI coding agent** so you get tool-using
+AI assistance without fighting a browser-hostile PTY TUI. It calls an
+OpenAI-compatible (or Anthropic) API directly and can run tools **inside
+rconsole's own host environment** — `bash`, `read_file`, `write_file`,
+`list_dir` — all rendered through the normal line console.
+
+### Providers (first match wins)
+
+| Provider       | Key(s)                                  | Base URL (default)                    |
+|----------------|-----------------------------------------|---------------------------------------|
+| **OpenCode Zen** | `OPENCODE_API_KEY` (alias `ZEN_API_KEY`) | `https://opencode.ai/zen/v1`        |
+| Anthropic      | `ANTHROPIC_API_KEY`                     | `https://api.anthropic.com`           |
+| OpenAI         | `OPENAI_API_KEY`                        | `https://api.openai.com/v1`           |
+
+Keys are read from your **`sudo env` store** (persisted per user, injected into
+every session) or the server process environment. Setting them needs no
+redeploy:
+
+```bash
+sudo env set OPENCODE_API_KEY=oc-...        # from https://opencode.ai/auth
+sudo env set OPENCODE_MODEL=hy3-free        # any Zen /v1/chat/completions model
+sudo agent
+```
+
+OpenRouter / local OpenAI-compatible servers work by setting `OPENAI_BASE_URL`
+(and `OPENAI_MODEL`). **OpenCode Zen note:** the GPT-5.x family on Zen requires
+the separate `/v1/responses` API (not yet wrapped here); use a chat/completions
+model such as `hy3-free`, `deepseek-v4-flash`, `glm-5.2`, `kimi-k3`, or
+`nemotron-3.5-lightning-free`.
+
+### Usage
+
+```bash
+sudo agent                       # interactive session (chat persists across commands)
+sudo agent "write a flask app and run it"   # one-shot task, then stays open
+sudo agent models                # list models from the current provider
+sudo agent help                  # show agent slash commands
+```
+
+Inside a session, slash commands are available:
+
+```
+/help        show help            /clear      forget the conversation
+/model <n>   switch model         /provider   show provider/model/base
+/keys        list keys (masked)   /models     list provider models
+/compact     summarise context    /system     print system prompt
+/exit        leave the agent
+```
+
+### Robustness
+
+- **Automatic retry/backoff** on `429`/`5xx` and connection errors (pooled
+  `requests.Session`).
+- **Persistent conversation** across `sudo agent` invocations (stored per tab;
+  cleared on `/clear` or `/exit`).
+- **Context compaction** — older turns are summarised automatically when the
+  transcript grows large, to cap token usage and cost.
+- **Token usage report** per turn and per session.
+- **Safety guard** — the `bash` tool refuses obviously destructive commands
+  (`rm -rf /`, `mkfs`, `dd` on disks, `shutdown`, …); run those directly in the
+  console if you truly intend them.
+
+---
+
 ## Architecture
 
 ```

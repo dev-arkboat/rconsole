@@ -20,7 +20,7 @@ HERE = Path(__file__).resolve().parent
 # Console-native commands that MUST be prefixed with `sudo` (admin only).
 PROTECTED = {"rboot", "cpass", "cuser", "muser", "serve", "gunicorn",
              "sprocess", "kprocess", "suser", "auser", "nauser", "ruser",
-             "env", "opencode"}
+             "env", "opencode", "agent"}
 
 # Registry of built-in commands.
 COMMANDS = {}
@@ -114,6 +114,11 @@ def cmd_help(ctx, args):
     out.append("  sudo env import        copy provider keys from the server environment")
     out.append("  sudo env               list / sudo env unset KEY")
     out.append("  sudo opencode [args]   launch the opencode AI agent TUI")
+    out.append("  sudo agent [prompt]    native in-console AI agent (no PTY; uses sudo env keys)")
+    out.append("  sudo agent help        show agent slash commands (/clear /model /keys /models ...)")
+    out.append("  sudo agent models      list models available from the current provider")
+    out.append("  Inside `sudo agent`:")
+    out.append("    /help /clear /model <name> /provider /keys /models /compact /system /exit")
     out.append("")
     out.append("Any other command runs on the REAL host shell:")
     out.append("  ls  pwd  mkdir  cat  rm  cp  mv  echo  whoami  id")
@@ -555,8 +560,9 @@ def cmd_ruser(ctx, args):
 _PROVIDER_KEYS = (
     "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY",
     "XAI_API_KEY", "GROQ_API_KEY", "AZURE_OPENAI_API_KEY", "OPENROUTER_API_KEY",
-    "MISTRAL_API_KEY", "DEEPSEEK_API_KEY", "OPENCODE_API_KEY",
-    "ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "OPENCODE_BASE_URL",
+    "MISTRAL_API_KEY", "DEEPSEEK_API_KEY", "OPENCODE_API_KEY", "ZEN_API_KEY",
+    "ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "OPENCODE_BASE_URL", "ZEN_BASE_URL",
+    "OPENCODE_MODEL", "ZEN_MODEL",
 )
 
 
@@ -1156,3 +1162,7 @@ def cmd_fm(ctx, args):
 
 # Register the fun/novelty commands (cowsay, fortune, figlet, ...).
 import fun  # noqa: E402,F401
+
+# Register the native in-console AI agent (a PTY-free alternative to opencode).
+import agent  # noqa: E402,F401
+COMMANDS["agent"] = agent.cmd_agent
