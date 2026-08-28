@@ -19,12 +19,32 @@ SESSIONS = {}              # (sid, tab_id) -> TermSession
 SESSIONS_LOCK = threading.Lock()
 
 
-def _build_env():
+def _build_env(sid=None):
     env = os.environ.copy()
     venv_dir = Path(sys.executable).parent
     path = env.get("PATH", "")
     if str(venv_dir) not in path.split(os.pathsep):
         env["PATH"] = str(venv_dir) + os.pathsep + path
+    # The server is usually started by a process manager / container without a
+    # controlling TTY, so os.environ has no TERM. Modern TUIs (opencode, lazygit,
+    # yazi, ...) need a real terminal type or they fail to render / spin forever
+    # (which can flood the PTY and trip a host health-check restart). Default to
+    # a 256-color xterm; callers may override via the real environment.
+    env.setdefault("TERM", "xterm-256color")
+    env.setdefault("COLORTERM", "truecolor")
+    env.setdefault("LANG", "C.UTF-8")
+    env.setdefault("LC_ALL", "C.UTF-8")
+    env.setdefault("CLICOLOR", "1")
+    env.setdefault("FORCE_COLOR", "1")
+    # Per-user custom environment (e.g. API keys set via `sudo env`) is exported
+    # into every session so tools like opencode pick the keys up automatically.
+    if sid:
+        try:
+            import state as _state
+            for k, v in (_state.get_env(sid) or {}).items():
+                env[k] = v
+        except Exception:
+            pass
     return env
 
 
@@ -74,7 +94,7 @@ class TermSession:
         from interp import _detect_shell
         shell_exe, flag = _detect_shell()
         cmdline = f'{flag} "{self.cmd.replace(chr(34), "\\" + chr(34))}"' if self.cmd else None
-        env = _build_env()
+        env = _build_env(self.sid)
         env_str = "\0".join(f"{k}={v}" for k, v in env.items()) + "\0"
         pty = PTY(self.cols, self.rows)
         pty.spawn(shell_exe, cmdline=cmdline, cwd=self.cwd, env=env_str)
@@ -99,7 +119,7 @@ class TermSession:
             fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
         except Exception:
             pass
-        env = _build_env()
+        env = _build_env(self.sid)
         proc = subprocess.Popen(
             argv, cwd=self.cwd, env=env,
             stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,

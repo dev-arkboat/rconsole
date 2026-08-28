@@ -45,12 +45,28 @@ def _detect_shell():
     return "sh", "-c"
 
 
-def _build_env():
+def _build_env(sid=None):
     env = os.environ.copy()
     venv_dir = Path(sys.executable).parent
     path = env.get("PATH", "")
     if str(venv_dir) not in path.split(os.pathsep):
         env["PATH"] = str(venv_dir) + os.pathsep + path
+    # Same terminal environment as the interactive PTY (see termsess._build_env):
+    # a real TERM lets TUIs render instead of hanging.
+    env.setdefault("TERM", "xterm-256color")
+    env.setdefault("COLORTERM", "truecolor")
+    env.setdefault("LANG", "C.UTF-8")
+    env.setdefault("LC_ALL", "C.UTF-8")
+    env.setdefault("CLICOLOR", "1")
+    env.setdefault("FORCE_COLOR", "1")
+    # Per-user custom environment (e.g. API keys set via `sudo env`).
+    if sid:
+        try:
+            import state as _state
+            for k, v in (_state.get_env(sid) or {}).items():
+                env[k] = v
+        except Exception:
+            pass
     return env
 
 
@@ -74,7 +90,7 @@ class Job:
             text=True,
             bufsize=1,
             shell=False,
-            env=_build_env(),
+            env=_build_env(self.sid),
         )
         # On POSIX, give the job its own session/process group so we can kill
         # the whole tree (shell + children) with killpg without affecting the

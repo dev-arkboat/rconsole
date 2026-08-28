@@ -98,6 +98,17 @@ def _passthrough(ctx, host_cmd):
     path = env.get("PATH", "")
     if str(venv_dir) not in path.split(os.pathsep):
         env["PATH"] = str(venv_dir) + os.pathsep + path
+    # Same terminal environment as the interactive PTY (see termsess._build_env):
+    # a server started without a TTY has no TERM, which breaks TUIs.
+    env.setdefault("TERM", "xterm-256color")
+    env.setdefault("COLORTERM", "truecolor")
+    env.setdefault("LANG", "C.UTF-8")
+    env.setdefault("LC_ALL", "C.UTF-8")
+    env.setdefault("CLICOLOR", "1")
+    env.setdefault("FORCE_COLOR", "1")
+    # Per-user custom environment (e.g. API keys set via `sudo env`).
+    for k, v in (state.get_env(ctx["sid"]) or {}).items():
+        env[k] = v
 
     shell_exe, flag = _detect_shell()
     cwd = ctx["tab"]["cwd"]

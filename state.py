@@ -49,6 +49,7 @@ def _write(username):
                 "tabs": {tid: _tab_persist(t) for tid, t in sess["tabs"].items()},
                 "aliases": sess.get("aliases", {}),
                 "theme": sess.get("theme", "default"),
+                "env": sess.get("env", {}),
             }, f)
     except Exception:
         pass
@@ -137,6 +138,7 @@ def _load(username):
         "hosts": {},
         "aliases": data.get("aliases", {}) or {},
         "theme": data.get("theme", "github") or "github",
+        "env": data.get("env", {}) or {},
     }
 
 
@@ -170,6 +172,33 @@ def remove_alias(username, name):
     return False
 
 
+# ---------------------------------------------------------------------- env vars
+def get_env(username):
+    """Custom environment variables exported into every session for this user."""
+    sess = STATE.get(username)
+    return (sess or {}).get("env", {}) if sess else {}
+
+
+def set_env(username, key, value):
+    sess = STATE.get(username)
+    if not sess:
+        sess = new_session(username)
+    sess.setdefault("env", {})[key] = value
+    save_now(username)
+
+
+def remove_env(username, key):
+    sess = STATE.get(username)
+    if not sess:
+        return False
+    env = sess.setdefault("env", {})
+    if key in env:
+        del env[key]
+        save_now(username)
+        return True
+    return False
+
+
 def set_theme(username, theme):
     sess = STATE.get(username)
     if not sess:
@@ -185,6 +214,7 @@ def new_session(username):
         sess = _load(username) or {"tabs": {}, "hosts": {}, "aliases": {}, "theme": "github"}
         sess.setdefault("aliases", {})
         sess.setdefault("theme", "default")
+        sess.setdefault("env", {})
         STATE[username] = sess
         return sess
 
