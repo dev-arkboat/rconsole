@@ -3,6 +3,11 @@
 const USER = window.RCONSOLE_USER || "user";
 let tabs = [];
 let activeId = null;
+// Which tab id is currently materialized in the shared #output DOM. Used by
+// renderOutput to detect a tab switch (the DOM is shared across all tabs) and
+// force a full rebuild — without this, switching back to a tab whose DOM was
+// clobbered by another tab shows the wrong (or empty) content.
+let renderedTabId = null;
 
 // ---------------------------------------------------------------------------
 // xterm.js is heavy and only needed for live terminal tabs (nano, vim, REPLs).
@@ -177,22 +182,25 @@ function onTailKey(e) {
 }
 function stopJobTail() {
   if (!jobTail) return;
+  const tab = jobTail.tab;
   jobTail.active = false;
   if (jobTail.timer) clearInterval(jobTail.timer);
   document.removeEventListener("keydown", onTailKey, true);
   jobTail = null;
   elCmd.disabled = false;
   elCmd.focus();
-  renderOutput();
+  if (!tab || isActiveTab(tab)) renderOutput();
 }
-function startJobTail(jid, isFg) {
+
+function startJobTail(tab, jid, isFg) {
   stopJobTail();
-  jobTail = { jid, off: 0, active: true, timer: null, fg: !!isFg };
+  jobTail = { jid, off: 0, active: true, timer: null, fg: !!isFg, tab };
   appendLines(
+    tab,
     "[tailing job " + jid + (isFg ? " (foreground)" : "") + " — press any key to stop]",
     "term-dim"
   );
-  renderOutput();
+  if (isActiveTab(tab)) renderOutput();
   elCmd.disabled = true;
   document.addEventListener("keydown", onTailKey, true);
   const tick = () => {
@@ -204,15 +212,14 @@ function startJobTail(jid, isFg) {
         if (j.text) {
           String(j.text).split("\n").forEach((l) => {
             const line = l === "" ? " " : l;
-            const t = activeTab();
-            t.lines.push({ text: line, html: ansiToHtml(line), cls: "" });
+            tab.lines.push({ text: line, html: ansiToHtml(line), cls: "" });
           });
-          renderOutput();
+          if (isActiveTab(tab)) renderOutput();
         }
         if (typeof j.off === "number") jobTail.off = j.off;
         if (!j.alive) {
-          appendLines("[job " + jid + " finished]", "term-dim");
-          renderOutput();
+          appendLines(tab, "[job " + jid + " finished]", "term-dim");
+          if (isActiveTab(tab)) renderOutput();
           stopJobTail();
         }
       })
@@ -221,7 +228,6 @@ function startJobTail(jid, isFg) {
   jobTail.timer = setInterval(tick, 800);
   tick();
 }
-
 function promptText(cwd) {
   return `${USER}@rconsole:${cwd}$ `;
 }
@@ -408,8 +414,8 @@ function appendLineEl(ln) {
 // normal text is appended line-by-line (ANSI aware); a fenced block becomes a
 // styled, syntax-highlighted "code box" element, so file edits/read shown by
 // the agent look like a little editor panel rather than raw text.
-function appendCodeBox(lang, code) {
-  const t = activeTab();
+function appendCodeBox(tab, lang, code) {
+  if (!tab) return;
   // Shell/command output can carry ANSI color codes; strip them so they don't
   // render as literal escape sequences inside the box.
   code = stripAnsi(code);
@@ -440,10 +446,11 @@ function appendCodeBox(lang, code) {
   else pre.textContent = code;
   box.appendChild(head);
   box.appendChild(pre);
-  t.lines.push({ el: box });
+  tab.lines.push({ el: box });
 }
 
-function appendRich(text, cls) {
+function appendRich(tab, text, cls) {
+  if (!tab) return;
   if (text === undefined || text === null) return;
   const lines = String(text).split("\n");
   let buf = [];
@@ -452,7 +459,7 @@ function appendRich(text, cls) {
   let fenceBuf = [];
   const flush = () => {
     if (buf.length) {
-      appendLines(buf.join("\n"), cls || "");
+      appendLines(tab, buf.join("\n"), cls || "");
       buf = [];
     }
   };
@@ -470,7 +477,7 @@ function appendRich(text, cls) {
       }
     } else {
       if (/^```\s*$/.test(line)) {
-        appendCodeBox(fenceLang, fenceBuf.join("\n"));
+        appendCodeBox(tab, fenceLang, fenceBuf.join("\n"));
         inFence = false;
         fenceBuf = [];
       } else {
@@ -478,7 +485,7 @@ function appendRich(text, cls) {
       }
     }
   }
-  if (inFence) {
+   if (inFence) {
     // Unterminated fence: emit as plain text rather than swallow content.
     buf.push("```" + fenceLang);
     buf = buf.concat(fenceBuf);
@@ -486,21 +493,31 @@ function appendRich(text, cls) {
   flush();
 }
 
+function isActiveTab(tab) {
+  return !!tab && activeId === tab.id;
+}
+
 function renderOutput() {
   const t = activeTab();
-  // Only rebuild the whole DOM when the line list itself changed (tab switch
-  // or clear). Otherwise append just the lines added since the last render —
-  // this keeps long sessions smooth instead of re-parsing every line each time.
-  if (t._renderedLines !== t.lines) {
+  // Full rebuild when (a) the active tab differs from what's in the DOM, or
+  // (b) this tab's line array was replaced (e.g. a `clear`). Otherwise just
+  // append the lines added since the last render — keeps long sessions smooth.
+  const needFull =
+    renderedTabId !== (t && t.id) ||
+    (t && t._renderedLines !== t.lines);
+  if (needFull) {
     elOutput.innerHTML = "";
-    t.lines.forEach(appendLineEl);
-    t._renderedLines = t.lines;
-  } else {
+    if (t) t.lines.forEach(appendLineEl);
+    renderedTabId = t ? t.id : null;
+  } else if (t) {
     for (let i = t._renderedCount || 0; i < t.lines.length; i++) {
       appendLineEl(t.lines[i]);
     }
   }
-  t._renderedCount = t.lines.length;
+  if (t) {
+    t._renderedLines = t.lines;
+    t._renderedCount = t.lines.length;
+  }
   // prompt
   if (t.interactive) {
     elPrompt.textContent = t.interactivePrompt;
@@ -519,25 +536,26 @@ function renderOutput() {
   }
 }
 
-function appendLines(text, cls) {
+function appendLines(tab, text, cls) {
+  if (!tab) return;
   if (text === undefined || text === null) return;
-  const t = activeTab();
   String(text).split("\n").forEach((l) => {
     const line = l === "" ? " " : l;
-    t.lines.push({ text: line, html: ansiToHtml(line), cls: cls || "" });
+    tab.lines.push({ text: line, html: ansiToHtml(line), cls: cls || "" });
   });
   // Bound the scrollback so very long sessions don't grow the DOM/memory
   // without limit (which would eventually make every render janky). Trim
   // occasionally and force a single rebuild rather than per-line.
   const CAP = 4000;
-  if (t.lines.length > CAP) {
-    t.lines.splice(0, t.lines.length - CAP);
-    t._renderedLines = null;
+  if (tab.lines.length > CAP) {
+    tab.lines.splice(0, tab.lines.length - CAP);
+    tab._renderedLines = null;
   }
 }
 
-async function send(cmd) {
-  const t = activeTab();
+async function send(cmd, tabId) {
+  const t = (tabId && tabs.find((x) => x.id === tabId)) || activeTab();
+  if (!t) return;
   const body = JSON.stringify({ cmd, tab: t.id });
   let resp;
   try {
@@ -554,6 +572,15 @@ async function send(cmd) {
     return;
   }
   const data = await resp.json();
+  handleResponse(t.id, data);
+}
+
+// Apply a server response to the specific tab that issued the command. Routing
+// by tab id (not the currently-active tab) keeps output in the right tab even
+// if the user switches tabs while a request is in flight.
+function handleResponse(tabId, data) {
+  const t = tabs.find((x) => x.id === tabId);
+  if (!t) return;
   if (data.redirect) {
     window.location = data.redirect;
     return;
@@ -564,18 +591,18 @@ async function send(cmd) {
   // automatically — do NOT show an input box, so the turn feels live instead of
   // going silent until the final answer.
   if (data._tick) {
-    if (data.output) appendRich(data.output, "");
-    renderOutput();
-    elCmd.disabled = true;
-    send("");
+    if (data.output) appendRich(t, data.output, "");
+    if (isActiveTab(t)) renderOutput();
+    if (isActiveTab(t)) elCmd.disabled = true;
+    send("", tabId);
     return;
   }
-  elCmd.disabled = false;
+  if (isActiveTab(t)) elCmd.disabled = false;
 
   // The agent asked the client to show a picker (e.g. /model with no argument).
   if (data.agent_picker) {
-    if (data.output) appendRich(data.output, "");
-    renderOutput();
+    if (data.output) appendRich(t, data.output, "");
+    if (isActiveTab(t)) renderOutput();
     openAgentPicker(data.agent_picker);
     return;
   }
@@ -586,7 +613,7 @@ async function send(cmd) {
   }
 
   if (data.jobtail !== undefined && data.jobtail !== null) {
-    startJobTail(data.jobtail, !!data.fg);
+    startJobTail(t, data.jobtail, !!data.fg);
     return;
   }
 
@@ -602,7 +629,7 @@ async function send(cmd) {
   }
 
   if (data.output !== undefined && data.output !== "") {
-    appendRich(data.output, "");
+    appendRich(t, data.output, "");
   }
   if (data.prompt !== undefined) {
     t.interactive = true;
@@ -612,7 +639,7 @@ async function send(cmd) {
     t.interactivePrompt = "";
   }
   if (data.cwd) t.cwd = data.cwd;
-  renderOutput();
+  if (isActiveTab(t)) renderOutput();
 }
 
 // ---------------------------------------------------------------------------
