@@ -23,7 +23,7 @@ INTERACTIVE = {
     "nano", "vim", "vi", "emacs", "nvim",
     "less", "more", "man", "most",
     "top", "htop", "btm", "glances", "watch",
-    "python", "python3", "pip", "py", "ipython", "node", "npm", "opencode", "irb", "lua", "php",
+    "python", "python3", "pip", "py", "ipython", "node", "npm", "npx", "opencode", "irb", "lua", "php",
     "bash", "sh", "zsh", "fish", "powershell", "pwsh", "cmd", "cmd.exe",
     "ssh", "telnet", "tmux", "screen", "lynx", "w3m", "mutt", "irssi",
     "htop", "fzf", "ranger", "nnn", "mc", "git",
