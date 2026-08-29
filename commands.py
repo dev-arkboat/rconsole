@@ -37,29 +37,53 @@ def _folder_name(path):
     return Path(path).name or "root"
 
 
+def _port_from_bind(val):
+    """Pull a valid TCP port out of a bind string.
+
+    Accepts '9000', ':9000', '127.0.0.1:9000', '0.0.0.0:9000', and the same
+    forms with a trailing unix-socket path. Returns an int in 1..65535 or None.
+    """
+    val = (val or "").strip().strip("'\"")
+    if not val:
+        return None
+    if ":" in val:
+        tail = val.rsplit(":", 1)[1]
+    else:
+        tail = val
+    tail = tail.split("/")[0]  # drop any socket path
+    if tail.isdigit():
+        port = int(tail)
+        if 1 <= port <= 65535:
+            return port
+    return None
+
+
 def _parse_port(args):
-    """Extract a port from args, supporting --bind host:port / -b :port."""
-    port = 8000
+    """Extract a port from gunicorn-style args.
+
+    Recognizes a bare port ('9000'), a host:port (':9000', '127.0.0.1:9000'),
+    '-b :9000' / '-b 127.0.0.1:9000', and '--bind=:9000'. Returns an int or
+    None when no port is present.
+    """
     for i, a in enumerate(args):
         if a in ("--bind", "-b") and i + 1 < len(args):
-            val = args[i + 1]
-            if ":" in val:
-                try:
-                    port = int(val.rsplit(":", 1)[1])
-                except ValueError:
-                    pass
+            p = _port_from_bind(args[i + 1])
+            if p is not None:
+                return p
         elif a.startswith("--bind="):
-            val = a.split("=", 1)[1]
-            if ":" in val:
-                try:
-                    port = int(val.rsplit(":", 1)[1])
-                except ValueError:
-                    pass
-    for a in reversed(args):
-        if a.isdigit():
-            port = int(a)
-            break
-    return port
+            p = _port_from_bind(a.split("=", 1)[1])
+            if p is not None:
+                return p
+        elif a.startswith("-b") and len(a) > 2 and a[2] == ":":
+            p = _port_from_bind(a[3:])
+            if p is not None:
+                return p
+    # Fall back to any token that looks like a port specification.
+    for a in args:
+        p = _port_from_bind(a)
+        if p is not None:
+            return p
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +103,7 @@ def cmd_help(ctx, args):
     ]
     sudo = [
         ("sudo serve <port>", "host cwd as a static site"),
-        ("sudo gunicorn <spec> -b :p", "host a WSGI app"),
+        ("sudo gunicorn <spec> [-b :p]", "host a WSGI app (prompts for port)"),
         ("sudo cpass / cuser", "change password / rename user"),
         ("sudo muser / ruser", "create / delete a user"),
         ("sudo suser / auser / nauser", "list / grant / revoke admin"),
@@ -285,7 +309,7 @@ def _launch(ctx, port, wsgi_spec=None):
             # Prefer the real gunicorn WSGI server.
             proc = subprocess.Popen(
                 [sys.executable, "-m", "gunicorn", wsgi_spec,
-                 "-b", f"127.0.0.1:{port}", "--chdir", real_cwd],
+                 "-b", f"0.0.0.0:{port}", "--chdir", real_cwd],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
             backend = "gunicorn"
@@ -319,11 +343,25 @@ def cmd_serve(ctx, args):
 @command("gunicorn")
 def cmd_gunicorn(ctx, args):
     if not args:
-        return "Usage: sudo gunicorn <module:app> -b :<port>"
+        return "Usage: sudo gunicorn <module:app> [-b :<port>] [<port>]"
     spec = args[0]
     if ":" not in spec:
         return "gunicorn: expected <module:app> (e.g. app:app)"
     port = _parse_port(args[1:])
+    if port is None:
+        # No port on the command line — ask interactively so the user can
+        # always choose one (instead of silently falling back to a default and
+        # colliding with the host web server's port).
+        while True:
+            ans = (yield "Port to bind (1024-65535) [8000]: ").strip()
+            if not ans:
+                port = 8000
+                break
+            p = _port_from_bind(ans)
+            if p is not None:
+                port = p
+                break
+            yield "Please enter a valid port number (1024-65535)."
     return _launch(ctx, port, wsgi_spec=spec)
 
 
