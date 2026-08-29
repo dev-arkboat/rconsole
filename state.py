@@ -17,7 +17,10 @@ DATA = HERE / "data"
 STATE_DIR = DATA / "state"
 
 STATE = {}  # username -> {"tabs": {...}, "hosts": {...}, "aliases": {...}, "theme": str}
-STATE_LOCK = threading.Lock()
+# Reentrant so a mutating helper (e.g. ensure_tab) can call save_now() without
+# deadlocking. Guards all in-memory mutations and the serialization read so the
+# background flush thread can't iterate STATE while a request mutates it.
+STATE_LOCK = threading.RLock()
 
 # Persistence is debounced: per-command writes (history/cwd) only mark a user
 # dirty and a background thread flushes them at most every few seconds, so a
@@ -44,13 +47,17 @@ def _write(username):
     if not sess:
         return
     try:
-        with open(_state_path(username), "w", encoding="utf-8") as f:
-            json.dump({
+        # Snapshot under the lock, then write outside it so a slow disk write
+        # doesn't block concurrent request threads.
+        with STATE_LOCK:
+            data = {
                 "tabs": {tid: _tab_persist(t) for tid, t in sess["tabs"].items()},
-                "aliases": sess.get("aliases", {}),
-                "theme": sess.get("theme", "default"),
-                "env": sess.get("env", {}),
-            }, f)
+                "aliases": dict(sess.get("aliases", {}) or {}),
+                "theme": sess.get("theme", "github"),
+                "env": dict(sess.get("env", {}) or {}),
+            }
+        with open(_state_path(username), "w", encoding="utf-8") as f:
+            json.dump(data, f)
     except Exception:
         pass
 
@@ -110,7 +117,9 @@ def _tab_persist(t):
         "isTerminal": bool(t.get("isTerminal", False)),
         "cmd": t.get("cmd", ""),
         "history": (t.get("history") or [])[-200:],
-        "gen": t.get("gen"),
+        # Generators can't be serialized; they are dropped on save and rebuilt
+        # lazily (interactive sessions are re-prompted, not resumed, on reload).
+        "gen": None,
         "prompt": t.get("prompt"),
     }
 
@@ -153,23 +162,25 @@ def get_aliases(username):
 
 
 def set_alias(username, name, value):
-    sess = STATE.get(username)
-    if not sess:
-        sess = new_session(username)
-    sess.setdefault("aliases", {})[name] = value
-    save_now(username)
+    with STATE_LOCK:
+        sess = STATE.get(username)
+        if not sess:
+            sess = new_session(username)
+        sess.setdefault("aliases", {})[name] = value
+        save_now(username)
 
 
 def remove_alias(username, name):
-    sess = STATE.get(username)
-    if not sess:
+    with STATE_LOCK:
+        sess = STATE.get(username)
+        if not sess:
+            return False
+        a = sess.setdefault("aliases", {})
+        if name in a:
+            del a[name]
+            save_now(username)
+            return True
         return False
-    a = sess.setdefault("aliases", {})
-    if name in a:
-        del a[name]
-        save_now(username)
-        return True
-    return False
 
 
 # ---------------------------------------------------------------------- env vars
@@ -180,31 +191,34 @@ def get_env(username):
 
 
 def set_env(username, key, value):
-    sess = STATE.get(username)
-    if not sess:
-        sess = new_session(username)
-    sess.setdefault("env", {})[key] = value
-    save_now(username)
+    with STATE_LOCK:
+        sess = STATE.get(username)
+        if not sess:
+            sess = new_session(username)
+        sess.setdefault("env", {})[key] = value
+        save_now(username)
 
 
 def remove_env(username, key):
-    sess = STATE.get(username)
-    if not sess:
-        return False
-    env = sess.setdefault("env", {})
-    if key in env:
-        del env[key]
-        save_now(username)
-        return True
+    with STATE_LOCK:
+        sess = STATE.get(username)
+        if not sess:
+            return False
+        env = sess.setdefault("env", {})
+        if key in env:
+            del env[key]
+            save_now(username)
+            return True
     return False
 
 
 def set_theme(username, theme):
-    sess = STATE.get(username)
-    if not sess:
-        sess = new_session(username)
-    sess["theme"] = theme
-    save_now(username)
+    with STATE_LOCK:
+        sess = STATE.get(username)
+        if not sess:
+            sess = new_session(username)
+        sess["theme"] = theme
+        save_now(username)
 
 
 def new_session(username):
@@ -220,36 +234,39 @@ def new_session(username):
 
 
 def ensure_tab(sess, username, tab_id):
-    if tab_id not in sess["tabs"]:
-        sess["tabs"][tab_id] = {
-            "id": tab_id,
-            "name": tab_id,
-            "cwd": default_cwd(),
-            "isTerminal": False,
-            "cmd": "",
-            "history": [],
-            "gen": None,
-            "prompt": None,
-        }
-        save_now(username)
-    return sess["tabs"][tab_id]
+    with STATE_LOCK:
+        if tab_id not in sess["tabs"]:
+            sess["tabs"][tab_id] = {
+                "id": tab_id,
+                "name": tab_id,
+                "cwd": default_cwd(),
+                "isTerminal": False,
+                "cmd": "",
+                "history": [],
+                "gen": None,
+                "prompt": None,
+            }
+            save_now(username)
+        return sess["tabs"][tab_id]
 
 
 def set_terminal(sess, username, tab_id, cmd, cwd):
     """Mark a tab as a persistent terminal and persist it."""
-    tab = ensure_tab(sess, username, tab_id)
-    tab["isTerminal"] = True
-    tab["cmd"] = cmd
-    tab["cwd"] = cwd
-    save_now(username)
-    return tab
+    with STATE_LOCK:
+        tab = ensure_tab(sess, username, tab_id)
+        tab["isTerminal"] = True
+        tab["cmd"] = cmd
+        tab["cwd"] = cwd
+        save_now(username)
+        return tab
 
 
 def remove_tab(username, tab_id):
-    sess = STATE.get(username)
-    if sess and tab_id in sess["tabs"]:
-        sess["tabs"].pop(tab_id, None)
-        save_now(username)
+    with STATE_LOCK:
+        sess = STATE.get(username)
+        if sess and tab_id in sess["tabs"]:
+            sess["tabs"].pop(tab_id, None)
+            save_now(username)
 
 
 # --------------------------------------------------------------------------- hosts

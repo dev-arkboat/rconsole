@@ -305,19 +305,30 @@ def _launch(ctx, port, wsgi_spec=None):
         state.kill_host(old["sid"], folder, port)
 
     if wsgi_spec:
+        prefix = f"/{folder}/{port}"
         if _use_gunicorn():
-            # Prefer the real gunicorn WSGI server.
+            # Prefer the real gunicorn WSGI server. We launch our own bootstrap
+            # module as the WSGI app so the user's app is mounted under the
+            # proxy prefix (SCRIPT_NAME) — otherwise its absolute routes/links
+            # (e.g. Flask's url_for) would collide with the main rconsole site.
+            env = dict(os.environ)
+            env["RCONSOLE_SPEC"] = wsgi_spec
+            env["RCONSOLE_CWD"] = real_cwd
+            env["RCONSOLE_PREFIX"] = prefix
+            # Ensure the bootstrap module is importable wherever gunicorn runs.
+            existing_pp = env.get("PYTHONPATH", "")
+            env["PYTHONPATH"] = (str(HERE) + os.pathsep + existing_pp).rstrip(os.pathsep)
             proc = subprocess.Popen(
-                [sys.executable, "-m", "gunicorn", wsgi_spec,
-                 "-b", f"0.0.0.0:{port}", "--chdir", real_cwd],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                [sys.executable, "-m", "gunicorn", "_wsgi_host:application",
+                 "-b", f"127.0.0.1:{port}", "--chdir", real_cwd],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env,
             )
             backend = "gunicorn"
         else:
-            # Fallback: lightweight wsgiref server.
+            # Fallback: lightweight wsgiref server (same prefix-aware wrapper).
             proc = subprocess.Popen(
                 [sys.executable, HERE / "_wsgi_host.py",
-                 wsgi_spec, str(port), real_cwd],
+                 wsgi_spec, str(port), real_cwd, prefix],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
             backend = "wsgiref"
@@ -728,7 +739,8 @@ def cmd_rboot(ctx, args):
 
     # Wipe in-memory state for every user.
     try:
-        state.STATE.clear()
+        with state.STATE_LOCK:
+            state.STATE.clear()
     except Exception:
         pass
 

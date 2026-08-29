@@ -187,11 +187,14 @@ def run():
     is_admin = bool(u and u.get("is_admin"))
 
     # Record history only for real commands (not interactive prompt replies).
+    # Mutating tab state under STATE_LOCK so the background flush thread can't
+    # read a half-updated tab while serializing it.
     if tab.get("gen") is None and raw.strip():
-        tab["history"].append(raw)
-        if len(tab["history"]) > 500:
-            tab["history"] = tab["history"][-500:]
-        state.save(username)
+        with state.STATE_LOCK:
+            tab["history"].append(raw)
+            if len(tab["history"]) > 500:
+                tab["history"] = tab["history"][-500:]
+            state.save(username)
 
     result = interp.process(tab, username, is_admin, username, raw)
     if isinstance(result, dict):
@@ -476,7 +479,10 @@ def handle_exception(e):
 
 # Seed the default user at import time so login works regardless of how the app
 # is launched (gunicorn/WSGI on Render never triggers the __main__ block).
-auth.seed_defaults()
+try:
+    auth.seed_defaults()
+except Exception as e:  # e.g. a read-only data dir shouldn't crash the whole app
+    app.logger.warning("Could not seed default user: %s", e)
 
 
 def main():

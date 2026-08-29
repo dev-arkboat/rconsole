@@ -187,8 +187,10 @@ function stopJobTail() {
   if (jobTail.timer) clearInterval(jobTail.timer);
   document.removeEventListener("keydown", onTailKey, true);
   jobTail = null;
-  elCmd.disabled = false;
-  elCmd.focus();
+  if (!tab || isActiveTab(tab)) {
+    elCmd.disabled = false;
+    elCmd.focus();
+  }
   if (!tab || isActiveTab(tab)) renderOutput();
 }
 
@@ -201,7 +203,7 @@ function startJobTail(tab, jid, isFg) {
     "term-dim"
   );
   if (isActiveTab(tab)) renderOutput();
-  elCmd.disabled = true;
+  if (isActiveTab(tab)) elCmd.disabled = true;
   document.addEventListener("keydown", onTailKey, true);
   const tick = () => {
     if (!jobTail || !jobTail.active) return;
@@ -519,11 +521,11 @@ function renderOutput() {
     t._renderedCount = t.lines.length;
   }
   // prompt
-  if (t.interactive) {
+  if (t && t.interactive) {
     elPrompt.textContent = t.interactivePrompt;
     elPrompt.className = "interactive";
   } else {
-    elPrompt.textContent = promptText(t.cwd);
+    elPrompt.textContent = t ? promptText(t.cwd) : "";
     elPrompt.className = "";
   }
   const sc = elOutput.parentElement;
@@ -602,8 +604,10 @@ function handleResponse(tabId, data) {
   // The agent asked the client to show a picker (e.g. /model with no argument).
   if (data.agent_picker) {
     if (data.output) appendRich(t, data.output, "");
-    if (isActiveTab(t)) renderOutput();
-    openAgentPicker(data.agent_picker);
+    if (isActiveTab(t)) {
+      renderOutput();
+      openAgentPicker(data.agent_picker);
+    }
     return;
   }
 
